@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/oramasys/agate/schemas/model_hardware_policy.schema.json",
+  "title": "Model Hardware Policy",
+  "description": "Agate v1 — hardware affinity routing specification for local LLM deployments. Defines which models are preferred, allowed, or forbidden on which hardware tiers. Any agent system (Python, JS, Rust, Go) can validate against this schema to participate in hardware-aware routing.",
+  "type": "object",
+  "required": ["version", "models", "routing"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump to 2 for breaking changes."
+    },
+    "models": {
+      "type": "object",
+      "description": "Map of model name to hardware affinity rules.",
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelSpec"
+      }
+    },
+    "routing": {
+      "type": "object",
+      "description": "Task+optimization key to model name routing table. Keys: '{task_type}:{optimize_for}' or '{task_type}:default' or 'default'.",
+      "additionalProperties": {
+        "type": "string",
+        "description": "Model name (must exist in models map)."
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional deployment metadata.",
+      "properties": {
+        "owner": { "type": "string" },
+        "last_updated": { "type": "string", "format": "date" },
+        "lan_topology": {
+          "type": "object",
+          "properties": {
+            "mac_endpoint": { "type": "string", "format": "uri" },
+            "windows_endpoint": { "type": "string", "format": "uri" },
+            "ollama_endpoint": { "type": "string", "format": "uri" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Verdict": {
+      "type": "string",
+      "enum": ["PREFER", "ALLOW", "NEVER"],
+      "description": "PREFER = use if available; ALLOW = acceptable fallback; NEVER = hard forbidden (raises HardwareAffinityError)."
+    },
+    "ModelSpec": {
+      "type": "object",
+      "description": "Hardware affinity rule for one model.",
+      "properties": {
+        "mac":     { "$ref": "#/$defs/Verdict" },
+        "windows": { "$ref": "#/$defs/Verdict" },
+        "shared":  { "$ref": "#/$defs/Verdict" },
+        "context": {
+          "type": "integer",
+          "description": "Context window size in tokens."
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Semantic roles this model is suited for (e.g. coder, orchestrator, validator)."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Human-readable rationale for this model's affinity rules."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

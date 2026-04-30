@@ -1,0 +1,26 @@
+# Agate example: single Mac workstation, Ollama backend
+version: 1
+
+metadata:
+  owner: solo-dev
+  last_updated: "2026-04-30"
+  lan_topology:
+    ollama_endpoint: "http://localhost:11434/v1"
+
+models:
+  llama-3.1-8B:
+    mac: PREFER
+    shared: ALLOW
+    context: 8192
+    roles: [general, coding, reasoning]
+
+  llama-3.2-3B:
+    mac: PREFER
+    shared: ALLOW
+    context: 4096
+    roles: [fallback, ops]
+
+routing:
+  coding:default:    llama-3.1-8B
+  reasoning:default: llama-3.1-8B
+  default:           llama-3.2-3B
