@@ -204,14 +204,17 @@ Where Agate distinguishes advisory affinity from hard safety/resource limits, th
 
 ## 8. MCP v2 is deliberately deferred
 
-Claude-Desktop-LLM currently uses the MCP TypeScript v1 line. Its MCP v2 redesign is deliberately deferred until the Orama/Perpetua migration into the `oramasys/*` repository family has stabilized enough to provide the target integration contracts.
+Claude-Desktop-LLM currently uses the MCP TypeScript v1 line. Its MCP v2 redesign MUST NOT begin until the Orama and Perpetua v2 migration into the `oramasys/*` repository family is **completed**, the resulting authority handoffs are explicit, and the target integration contracts are merged and authoritative.
+
+This is a sequencing gate, not a soft preference.
 
 Consequences:
 
 - Agate does not design around MCP v2 today;
 - Claude-Desktop-LLM should modernize its internal architecture without prematurely coupling to MCP v2 APIs;
 - future MHS interoperability should not be forced through a speculative MCP v2 design;
-- stdio/provider behavior remains independently testable during the deferral window.
+- stdio/provider behavior remains independently testable during the deferral window;
+- no compatibility shim should be introduced merely to anticipate an unfinished `oramasys/*` v2 contract.
 
 ## 9. OpenTelemetry is out of scope
 
@@ -259,7 +262,8 @@ Claude-Desktop-LLM
   = conceptual runtime companion to Agate
 
 MCP v2
-  = deferred until Orama/Perpetua oramasys/* migration stabilizes
+  = blocked until Orama + Perpetua v2 oramasys/* migration is complete
+    and its contracts/authority handoffs are merged
 
 OpenTelemetry
   = out of scope
