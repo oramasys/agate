@@ -32,7 +32,7 @@ Agate cold-local-metal profile
   memory / VRAM state
   model fit + affinity
   approved placement constraints
-  runtime availability
+  host / accelerator readiness
   load/unload eligibility
   local performance measurements
         |
@@ -85,8 +85,14 @@ The intended bundle is deliberately split by authority.
 - model fit and affinity;
 - placement verdicts such as `PREFER`, `ALLOW`, and `NEVER`;
 - hard resource constraints that must be checked before model dispatch/load;
+- host/accelerator readiness and hardware-state facts needed to decide placement;
 - future standardized local-compute state/capability representation;
 - future MHS compatibility/profile mapping if the public MHS standard stabilizes.
+
+Agate does **not** own provider health, loaded-model state, provider lifecycle, or provider-specific
+runtime availability. Those are runtime/provider-adapter facts. Agate may consume a narrow,
+normalized readiness input from an adapter when a placement decision needs it, but that does not
+transfer provider-state authority into Agate.
 
 ### Claude-Desktop-LLM owns
 
@@ -122,16 +128,18 @@ This table is a conceptual mapping only. It is not an assertion about final MHS 
 
 | MHS-style concept | Agate local-compute interpretation |
 | --- | --- |
-| Device identity | host, accelerator, runtime identity |
-| Capability | backend support: Metal/MLX, CUDA, ROCm, CPU; memory capacity; supported model/runtime features |
-| State | available memory/VRAM, runtime health, loaded models, utilization, optional thermal/power readings |
+| Device identity | host and accelerator identity; runtime identity only as an external adapter reference |
+| Capability | backend support: Metal/MLX, CUDA, ROCm, CPU; memory capacity; supported hardware features |
+| State | available memory/VRAM, host/accelerator readiness, utilization, optional thermal/power readings |
 | Procedure | inspect capability; determine fit; approve/refuse placement; optionally request runtime load/unload through an adapter |
-| Measurement | latency, throughput, memory use, load time, context capacity |
+| Measurement | hardware-side latency/throughput evidence, memory use, load-related resource cost, context capacity |
 | Constraint | model-fit floor, memory budget, forbidden hardware tier, operator policy |
 | Safety boundary | hard placement/resource limits that cannot be bypassed accidentally by orchestration |
-| Discovery | local/fleet inventory of eligible compute devices and runtimes |
+| Discovery | local/fleet inventory of eligible compute devices and accelerator readiness |
 
-Agate should model **hardware facts and policy**. Provider-specific operations belong behind adapters such as Claude-Desktop-LLM rather than being embedded directly into Agate's core schema.
+Agate should model **hardware facts and policy**. Provider health, loaded-model state, and
+provider-specific operations belong behind adapters such as Claude-Desktop-LLM rather than being
+embedded directly into Agate's core schema.
 
 ## 5. Near-term schema policy
 
@@ -203,10 +211,21 @@ Agate placement evaluation
 Examples of hard constraints include:
 
 - model cannot fit within available memory/VRAM;
-- operator has marked the model `NEVER` for a hardware class;
 - required acceleration backend is absent;
 - local-only policy forbids remote fallback;
-- runtime state is unhealthy or unavailable.
+- host/accelerator readiness is insufficient for placement.
+
+Provider health and loaded-model state are not Agate-owned state. The provider adapter MUST still
+refuse execution when its runtime is unhealthy or unavailable, even after Agate has approved the
+hardware placement.
+
+The existing GGUF RFC's `--ignore-affinity` override applies only to **Agate affinity enforcement**,
+including the RFC's `NEVER` verdict. It MUST NOT disable independent hard resource checks such as
+memory/VRAM fit, required-backend presence, or host/accelerator readiness, and it cannot override
+provider/runtime health checks enforced by Claude-Desktop-LLM or another provider adapter.
+Implementations SHOULD test these boundaries explicitly: the same request with
+`--ignore-affinity` may bypass an affinity verdict, but MUST still fail each independent hard
+constraint.
 
 Where Agate distinguishes advisory affinity from hard safety/resource limits, the distinction must be explicit and testable.
 
@@ -312,7 +331,8 @@ This positioning is successful when:
 1. Agate can describe enough local compute capability and policy to make deterministic placement decisions before a provider call;
 2. Claude-Desktop-LLM can consume those decisions without owning Agate's policy semantics;
 3. Claude-Desktop-LLM retains its canonical TypeScript/tool-registry/provider-contract architecture while Ollama and LM Studio remain the two canonical runtime adapters;
-4. provider observability targets Ollama and LM Studio directly without requiring OpenTelemetry;
-5. no MCP v2 dependency is required before the explicit migration gate opens;
-6. an eventual MHS compute adapter can be added without replacing Agate or creating a second policy authority;
-7. all claims of MHS compatibility are backed by the then-current public normative MHS specification rather than research-preview inference.
+4. provider health and loaded-model state remain provider-adapter authority rather than becoming Agate-owned state;
+5. provider observability targets Ollama and LM Studio directly without requiring OpenTelemetry;
+6. no MCP v2 dependency is required before the explicit migration gate opens;
+7. an eventual MHS compute adapter can be added without replacing Agate or creating a second policy authority;
+8. all claims of MHS compatibility are backed by the then-current public normative MHS specification rather than research-preview inference.

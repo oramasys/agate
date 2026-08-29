@@ -16,7 +16,11 @@ Today, every team that builds local-first AI tooling solves this problem in isol
 
 Agate's long-term role is the **cold-local-metal compute/GPU profile** of the OramaSys stack: operator-owned local compute, accelerator capability, model fit, affinity, and hard placement constraints.
 
-The intended scope includes Apple Metal/MLX, NVIDIA CUDA, AMD ROCm, CPU/RAM fallback, VRAM/unified-memory capacity, local runtime availability, model placement, and related compute state. It does **not** expand Agate into a general robotics, laboratory-instrument, or physical-device automation framework.
+The intended scope includes Apple Metal/MLX, NVIDIA CUDA, AMD ROCm, CPU/RAM fallback,
+VRAM/unified-memory capacity, host/accelerator readiness required for placement, model placement,
+and related compute state. Provider health, loaded-model state, and provider lifecycle remain
+Claude-Desktop-LLM/runtime-adapter concerns. Agate does **not** expand into a general robotics,
+laboratory-instrument, or physical-device automation framework.
 
 Agate is being positioned to **converge conceptually with the compute-hardware subset of Anthropic's Model Hardware Standard (MHS)** as that research-preview specification matures. This is a direction of travel, not a claim of current MHS conformance. Agate v1 remains authoritative for its existing affinity contract until a public, stable MHS profile provides enough normative detail to justify a compatibility layer.
 
