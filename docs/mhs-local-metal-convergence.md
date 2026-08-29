@@ -215,6 +215,13 @@ Examples of hard constraints include:
 - local-only policy forbids remote fallback;
 - host/accelerator readiness is insufficient for placement.
 
+Readiness is **fail-closed placement evidence**. If required host/accelerator readiness is missing,
+stale beyond its declared validity window, or explicitly unavailable, Agate has insufficient
+current evidence to approve placement and MUST refuse the placement. `--ignore-affinity` MUST NOT
+turn missing, stale, or unavailable readiness into approval. Boundary tests MUST cover all three
+states (missing, stale, unavailable) and prove that each remains denied both with and without the
+affinity override.
+
 Provider health and loaded-model state are not Agate-owned state. The provider adapter MUST still
 refuse execution when its runtime is unhealthy or unavailable, even after Agate has approved the
 hardware placement.
