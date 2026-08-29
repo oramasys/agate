@@ -1,0 +1,282 @@
+# Agate ↔ MHS Cold-Local-Metal Convergence
+
+**Status:** architecture direction / non-normative roadmap  
+**Date:** 2026-08-29  
+**Applies to:** `oramasys/agate`, OramaSys hardware-policy planning, and the Claude-Desktop-LLM local-model integration boundary
+
+## 1. Position
+
+Agate is the OramaSys hardware capability, affinity, and routing contract for **cold-local-metal compute**: operator-owned local CPU/GPU/accelerator resources used to host and run local language models.
+
+Anthropic's Model Hardware Standard (MHS) is currently a research preview. Public materials describe a model-agnostic hardware abstraction in which devices expose machine-readable state, capabilities/procedures, physical characteristics, discoverability, and enforced safety limits through a standardized driver/interface layer.
+
+Agate SHOULD converge with the subset of those ideas that apply cleanly to local compute hardware, but MUST NOT claim MHS conformance until Anthropic publishes a sufficiently stable, normative specification and conformance surface.
+
+The convergence goal is therefore:
+
+```text
+MHS general physical-device model
+  identity
+  capability
+  state
+  procedure
+  constraint
+  measurement
+  safety boundary
+        |
+        | profile / semantic convergence
+        v
+Agate cold-local-metal profile
+  host + accelerator identity
+  compute capability
+  memory / VRAM state
+  model fit + affinity
+  approved placement constraints
+  runtime availability
+  load/unload eligibility
+  local performance measurements
+        |
+        v
+Claude-Desktop-LLM
+  direct Ollama / LM Studio control
+```
+
+Agate remains the **policy/capability authority**. Claude-Desktop-LLM remains the **runtime/provider adapter authority**.
+
+## 2. What "cold-local-metal" means
+
+For Agate, cold-local-metal means directly operator-controlled physical compute resources rather than an abstract cloud placement target.
+
+Initial families include:
+
+```text
+Apple Silicon
+  Metal / MLX
+  unified memory
+
+NVIDIA
+  CUDA
+  VRAM
+
+AMD
+  ROCm
+  VRAM
+
+CPU-only fallback
+  system RAM
+  local inference runtime
+```
+
+The phrase does not require that hardware literally be powered off or thermally cold. It distinguishes **local physical compute inventory and constraints** from generic remote/cloud execution policy.
+
+## 3. Conceptual bundle with Claude-Desktop-LLM
+
+The intended bundle is deliberately split by authority.
+
+### Agate owns
+
+- local host/accelerator capability descriptions;
+- hardware-tier classification;
+- model fit and affinity;
+- placement verdicts such as `PREFER`, `ALLOW`, and `NEVER`;
+- hard resource constraints that must be checked before model dispatch/load;
+- future standardized local-compute state/capability representation;
+- future MHS compatibility/profile mapping if the public MHS standard stabilizes.
+
+### Claude-Desktop-LLM owns
+
+- canonical Ollama provider integration;
+- canonical LM Studio provider integration;
+- MCP-facing local-model tools for Claude Desktop / Claude Code;
+- local provider health, model enumeration, inference, chat, embeddings, and provider-specific model operations;
+- provider/runtime configuration and request translation.
+
+### OramaSys upper layers own
+
+- task-level orchestration;
+- model-selection policy above raw hardware fit;
+- effect/approval policy;
+- evaluation and promotion policy;
+- workflow semantics.
+
+### Perpetua / security layers own
+
+- generic endpoint authorization and safe transport where required;
+- redaction/privacy boundaries;
+- operational evidence and security invariants;
+- other cross-cutting runtime controls that are not hardware-affinity semantics.
+
+No lower layer should depend back on an upper adapter to define its contract.
+
+## 4. MHS semantic mapping for local compute
+
+This table is a conceptual mapping only. It is not an assertion about final MHS field names or wire formats.
+
+| MHS-style concept | Agate local-compute interpretation |
+| --- | --- |
+| Device identity | host, accelerator, runtime identity |
+| Capability | backend support: Metal/MLX, CUDA, ROCm, CPU; memory capacity; supported model/runtime features |
+| State | available memory/VRAM, runtime health, loaded models, utilization, optional thermal/power readings |
+| Procedure | inspect capability; determine fit; approve/refuse placement; optionally request runtime load/unload through an adapter |
+| Measurement | latency, throughput, memory use, load time, context capacity |
+| Constraint | model-fit floor, memory budget, forbidden hardware tier, operator policy |
+| Safety boundary | hard placement/resource limits that cannot be bypassed accidentally by orchestration |
+| Discovery | local/fleet inventory of eligible compute devices and runtimes |
+
+Agate should model **hardware facts and policy**. Provider-specific operations belong behind adapters such as Claude-Desktop-LLM rather than being embedded directly into Agate's core schema.
+
+## 5. Near-term schema policy
+
+Agate v1 MUST remain stable while MHS is still a research preview.
+
+Therefore, near-term work SHOULD focus on additive, implementation-independent concepts that are useful even without MHS:
+
+1. distinguish physical host identity from abstract tier labels;
+2. describe accelerator backend and memory capacity;
+3. allow explicit resource requirements for a model;
+4. define machine-readable capability/state snapshots separately from operator policy;
+5. retain a single authoritative policy source;
+6. keep runtime/provider details in adapters.
+
+Do **not** add speculative fields merely because they seem likely to appear in MHS.
+
+## 6. Future Agate profile shape
+
+A future additive profile may conceptually separate facts from policy:
+
+```text
+ComputeDevice
+  id
+  host
+  accelerator_kind
+  backend
+  total_memory
+  available_memory
+  capabilities
+  state
+
+ModelRequirement
+  min_memory
+  preferred_backend
+  supported_backends
+  context_requirement
+
+PlacementPolicy
+  device/model verdict
+  hard constraints
+  operator overrides
+
+PlacementDecision
+  selected device
+  evidence
+  rejected alternatives
+  policy version
+```
+
+This is a roadmap shape, not Agate v2 schema text.
+
+The important rule is that **observed hardware state is not itself policy**, and operator policy is not silently rewritten by runtime discovery.
+
+## 7. Safety and hard constraints
+
+MHS emphasizes that physical safety limits should exist independently of model behavior. Agate should adopt the analogous principle for local compute:
+
+```text
+agent/orchestrator preference
+        |
+        v
+Agate placement evaluation
+        |
+        +-- allowed --> provider adapter
+        |
+        +-- forbidden --> refuse before load/dispatch
+```
+
+Examples of hard constraints include:
+
+- model cannot fit within available memory/VRAM;
+- operator has marked the model `NEVER` for a hardware class;
+- required acceleration backend is absent;
+- local-only policy forbids remote fallback;
+- runtime state is unhealthy or unavailable.
+
+Where Agate distinguishes advisory affinity from hard safety/resource limits, the distinction must be explicit and testable.
+
+## 8. MCP v2 is deliberately deferred
+
+Claude-Desktop-LLM currently uses the MCP TypeScript v1 line. Its MCP v2 redesign is deliberately deferred until the Orama/Perpetua migration into the `oramasys/*` repository family has stabilized enough to provide the target integration contracts.
+
+Consequences:
+
+- Agate does not design around MCP v2 today;
+- Claude-Desktop-LLM should modernize its internal architecture without prematurely coupling to MCP v2 APIs;
+- future MHS interoperability should not be forced through a speculative MCP v2 design;
+- stdio/provider behavior remains independently testable during the deferral window.
+
+## 9. OpenTelemetry is out of scope
+
+OpenTelemetry is not part of the Agate ↔ Claude-Desktop-LLM conceptual bundle.
+
+Agate may define structured decision evidence as ordinary data, and consuming systems may observe it, but Agate MUST NOT require an OpenTelemetry SDK/exporter.
+
+Claude-Desktop-LLM likewise should not add OpenTelemetry merely to align with Perpetua. Its modernization target is direct, canonical Ollama/LM Studio operation with small local security and test boundaries.
+
+## 10. MHS bridge policy when the standard stabilizes
+
+If MHS becomes publicly normative, Agate should evaluate an **adapter/profile**, not a rewrite.
+
+Preferred direction:
+
+```text
+Agate policy + local compute facts
+        |
+        v
+optional MHS compute-profile adapter
+        |
+        v
+MHS-compatible agent/device ecosystem
+```
+
+The adapter may translate Agate capability/state/policy concepts into the then-current MHS representation, but:
+
+- Agate remains authoritative for OramaSys hardware policy;
+- no silent dual writable source of truth is allowed;
+- MHS transport/driver lifecycle should remain outside the core policy schema;
+- compatibility must be proven against the actual published MHS specification and conformance tests available at that time.
+
+## 11. Roadmap implications for all Agate planning
+
+All future Agate plans should use the following framing unless explicitly superseded:
+
+```text
+Agate
+  = hardware capability + affinity + routing authority
+  = cold-local-metal compute/GPU subset
+  = MHS-convergent, not presently MHS-conformant
+
+Claude-Desktop-LLM
+  = direct canonical Ollama + LM Studio adapter/control surface
+  = conceptual runtime companion to Agate
+
+MCP v2
+  = deferred until Orama/Perpetua oramasys/* migration stabilizes
+
+OpenTelemetry
+  = out of scope
+
+General robots/lab hardware
+  = MHS domain, not Agate core scope
+```
+
+When an existing OramaSys plan says only that Agate owns "hardware capability/affinity/routing contracts," interpret that phrase using this narrower, more concrete local-metal definition.
+
+## 12. Completion criterion
+
+This positioning is successful when:
+
+1. Agate can describe enough local compute capability and policy to make deterministic placement decisions before a provider call;
+2. Claude-Desktop-LLM can consume those decisions without owning Agate's policy semantics;
+3. Ollama and LM Studio remain the two canonical local runtime targets;
+4. no MCP v2 or OpenTelemetry dependency is required to make the local stack correct;
+5. an eventual MHS compute adapter can be added without replacing Agate or creating a second policy authority;
+6. all claims of MHS compatibility are backed by the then-current public normative MHS specification rather than research-preview inference.
