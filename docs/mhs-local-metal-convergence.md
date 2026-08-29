@@ -38,7 +38,12 @@ Agate cold-local-metal profile
         |
         v
 Claude-Desktop-LLM
-  direct Ollama / LM Studio control
+  canonical local-model integration layer
+        |
+     +--+--+
+     |     |
+     v     v
+  Ollama  LM Studio
 ```
 
 Agate remains the **policy/capability authority**. Claude-Desktop-LLM remains the **runtime/provider adapter authority**.
@@ -85,11 +90,14 @@ The intended bundle is deliberately split by authority.
 
 ### Claude-Desktop-LLM owns
 
+- the canonical local-model tool/server implementation;
+- the provider contract and canonical tool registry;
 - canonical Ollama provider integration;
 - canonical LM Studio provider integration;
 - MCP-facing local-model tools for Claude Desktop / Claude Code;
 - local provider health, model enumeration, inference, chat, embeddings, and provider-specific model operations;
-- provider/runtime configuration and request translation.
+- provider/runtime configuration and request translation;
+- provider-native observability integration against Ollama and LM Studio.
 
 ### OramaSys upper layers own
 
@@ -216,13 +224,33 @@ Consequences:
 - stdio/provider behavior remains independently testable during the deferral window;
 - no compatibility shim should be introduced merely to anticipate an unfinished `oramasys/*` v2 contract.
 
-## 9. OpenTelemetry is out of scope
+## 9. OpenTelemetry is out of scope; provider-native observability is the target
 
-OpenTelemetry is not part of the Agate ↔ Claude-Desktop-LLM conceptual bundle.
+OpenTelemetry is explicitly out of scope for Claude-Desktop-LLM **because observability should target Ollama and LM Studio directly at their provider/runtime boundaries**, rather than introducing a generic OpenTelemetry instrumentation/export pipeline between Claude-Desktop-LLM and those runtimes.
 
-Agate may define structured decision evidence as ordinary data, and consuming systems may observe it, but Agate MUST NOT require an OpenTelemetry SDK/exporter.
+This is an **observability implementation rule only**. It does **not** change the Claude-Desktop-LLM architecture target. The canonical TypeScript implementation, tool registry, provider contract, provider adapters, policy boundaries, storage boundary, and strangler migration remain the intended architecture.
 
-Claude-Desktop-LLM likewise should not add OpenTelemetry merely to align with Perpetua. Its modernization target is direct, canonical Ollama/LM Studio operation with small local security and test boundaries.
+The observability direction is:
+
+```text
+canonical Claude-Desktop-LLM architecture
+        |
+        +--> Ollama adapter ------> Ollama native status / response / runtime observations
+        |
+        +--> LM Studio adapter ---> LM Studio native status / response / runtime observations
+```
+
+Accordingly:
+
+- do not add an OpenTelemetry SDK, OTLP exporter, Collector topology, or generic telemetry provider lifecycle to Claude-Desktop-LLM;
+- observe Ollama through its own runtime/API surfaces and response metadata;
+- observe LM Studio through its own runtime/API surfaces and response metadata;
+- normalize provider-native observations only where Claude-Desktop-LLM needs a common internal diagnostic view;
+- do not make a local JSONL sink the observability authority or a substitute for provider-native runtime visibility;
+- an optional local audit/debug record may exist if useful, but it is secondary evidence and MUST NOT redefine the architecture or become a second source of provider state;
+- retain privacy/redaction boundaries for any data Claude-Desktop-LLM records or exposes.
+
+Agate may define structured placement-decision evidence as ordinary data, but Agate MUST NOT require OpenTelemetry and does not own Claude-Desktop-LLM runtime observability.
 
 ## 10. MHS bridge policy when the standard stabilizes
 
@@ -258,7 +286,9 @@ Agate
   = MHS-convergent, not presently MHS-conformant
 
 Claude-Desktop-LLM
-  = direct canonical Ollama + LM Studio adapter/control surface
+  = canonical local-model architecture with a provider contract
+  = Ollama + LM Studio as canonical provider/runtime adapters
+  = provider-native observability against Ollama + LM Studio directly
   = conceptual runtime companion to Agate
 
 MCP v2
@@ -266,7 +296,8 @@ MCP v2
     and its contracts/authority handoffs are merged
 
 OpenTelemetry
-  = out of scope
+  = out of scope specifically for observability
+  = MUST NOT be used as a reason to alter the architecture target
 
 General robots/lab hardware
   = MHS domain, not Agate core scope
@@ -280,7 +311,8 @@ This positioning is successful when:
 
 1. Agate can describe enough local compute capability and policy to make deterministic placement decisions before a provider call;
 2. Claude-Desktop-LLM can consume those decisions without owning Agate's policy semantics;
-3. Ollama and LM Studio remain the two canonical local runtime targets;
-4. no MCP v2 or OpenTelemetry dependency is required to make the local stack correct;
-5. an eventual MHS compute adapter can be added without replacing Agate or creating a second policy authority;
-6. all claims of MHS compatibility are backed by the then-current public normative MHS specification rather than research-preview inference.
+3. Claude-Desktop-LLM retains its canonical TypeScript/tool-registry/provider-contract architecture while Ollama and LM Studio remain the two canonical runtime adapters;
+4. provider observability targets Ollama and LM Studio directly without requiring OpenTelemetry;
+5. no MCP v2 dependency is required before the explicit migration gate opens;
+6. an eventual MHS compute adapter can be added without replacing Agate or creating a second policy authority;
+7. all claims of MHS compatibility are backed by the then-current public normative MHS specification rather than research-preview inference.
