@@ -87,6 +87,12 @@ print('Valid.')
 
 Full JSON Schema: [`schemas/model_hardware_policy.schema.json`](schemas/model_hardware_policy.schema.json)
 
+Portable profile consumers should use
+[`schemas/hardware_profiles.schema.json`](schemas/hardware_profiles.schema.json).
+The reference TypeScript binding in
+[`bindings/typescript/`](bindings/typescript/) validates data through that
+schema rather than maintaining a second policy implementation.
+
 Verdicts:
 - `PREFER` — use this tier if available; it is the optimal target
 - `ALLOW` — acceptable fallback; use if preferred tier unavailable  
@@ -109,6 +115,45 @@ Agate owns hardware capability, affinity, model-fit, and routing contracts. It d
 - cloud placement as the default architecture.
 
 Future MHS interoperability, if adopted, should be an adapter/profile over the stable Agate contract rather than a second writable source of hardware policy truth.
+
+## Implementation status
+
+`src/agate/` is the first real implementation of this contract: loading a
+schema-conformant `model_hardware_policy.yml`, resolving a named physical
+profile (the portable `src/agate/data/hardware_profiles.json` catalog holds the
+three proven fleet profiles — mac-studio, win-rtx3080, win-rtx5080) against a
+model, and returning
+`PREFER`/`ALLOW`/`NEVER` with fail-closed behavior for unknown models.
+The default policy is packaged in the wheel; `config/model_hardware_policy.yml`
+is a readable, editable deployment template. Set `AGATE_PROFILE_DATABASE` to an
+operator-maintained JSON catalog when the local fleet differs from the packaged
+defaults.
+
+`observe_local_hardware()` collects local, best-effort physical evidence without
+provider or network I/O. `identify_profile()` only returns a profile when that
+evidence matches every configured identity field; incomplete or conflicting
+evidence returns `None` rather than guessing. This keeps runtime observation,
+operator-editable specifications, and model-fit policy separate.
+
+On Windows, observation uses local PowerShell/CIM queries with `-NoProfile` and
+`-NonInteractive`. Failed commands, malformed output, and unusable capacity
+values yield incomplete evidence rather than a profile claim. A real Windows
+canary remains an operator-run evidence step; automated tests use only synthetic
+command output.
+
+Explicitly not yet implemented, because the design decisions they depend
+on are genuinely open, not because they were forgotten:
+
+- **The "too small / overqualified" verdict** (`PROFILE_UNDERUSE`). No
+  numeric threshold or scoping rule has been decided — this needs the
+  repo owner's input, not an invented default.
+- **Machine-level concurrency/thermal safety.** The mac-studio
+  concurrent-heavy-engine prohibition is preserved in portable profile data,
+  but its admission/capacity enforcement remains a separate policy plane.
+- **win-rtx3080 vs win-rtx5080** currently resolve to the same schema
+  verdict tier (`windows`) — the v1 schema has no way to express them as
+  separately-verdicted identities. A real, open question for a future
+  schema v2, not silently worked around.
 
 ## Spec versioning
 
