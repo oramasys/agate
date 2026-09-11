@@ -87,6 +87,12 @@ print('Valid.')
 
 Full JSON Schema: [`schemas/model_hardware_policy.schema.json`](schemas/model_hardware_policy.schema.json)
 
+Portable profile consumers should use
+[`schemas/hardware_profiles.schema.json`](schemas/hardware_profiles.schema.json).
+The reference TypeScript binding in
+[`bindings/typescript/`](bindings/typescript/) validates data through that
+schema rather than maintaining a second policy implementation.
+
 Verdicts:
 - `PREFER` — use this tier if available; it is the optimal target
 - `ALLOW` — acceptable fallback; use if preferred tier unavailable  
