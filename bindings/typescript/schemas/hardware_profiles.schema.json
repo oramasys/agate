@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/oramasys/agate/schemas/hardware_profiles.schema.json",
+  "title": "Hardware Profiles",
+  "description": "Agate v1 — portable hardware-profile database for local LLM deployments. Each profile is a named physical identity with validated match predicates; a live observation is matched against this database but never rewrites it. Any consumer (Python, JS, Rust, Go) can validate against this schema before accepting an operator-edited database.",
+  "type": "object",
+  "required": ["version", "profiles"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump to 2 for breaking changes."
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Named physical hardware profiles. Profile IDs must be unique (enforced by the Python loader, not expressible in JSON Schema).",
+      "items": { "$ref": "#/$defs/HardwareProfile" }
+    }
+  },
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "A string that contains at least one non-whitespace character."
+    },
+    "MatchPredicate": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Case-insensitive substring predicate. Must contain at least one non-whitespace character."
+    },
+    "MemoryGb": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Memory capacity in whole GB; must be a positive integer, never zero, negative, fractional, or boolean."
+    },
+    "VerdictTier": {
+      "type": "string",
+      "enum": ["mac", "windows", "shared"],
+      "description": "The policy verdict tier this profile resolves to (see model_hardware_policy.schema.json)."
+    },
+    "MatchConstraints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "description": "Identity evidence an observation must satisfy for this profile to be claimed. Empty or unsupported constraint sets are rejected.",
+      "properties": {
+        "os": { "$ref": "#/$defs/MatchPredicate" },
+        "cpu_contains": { "$ref": "#/$defs/MatchPredicate" },
+        "accelerator_contains": { "$ref": "#/$defs/MatchPredicate" },
+        "ram_gb": { "$ref": "#/$defs/MemoryGb" },
+        "accelerator_memory_gb": { "$ref": "#/$defs/MemoryGb" }
+      }
+    },
+    "HardwareProfile": {
+      "type": "object",
+      "required": [
+        "profile_id",
+        "role",
+        "verdict_tier",
+        "os",
+        "cpu",
+        "ram_gb",
+        "accelerator",
+        "accelerator_memory_gb",
+        "match"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": { "$ref": "#/$defs/NonEmptyString" },
+        "role": { "$ref": "#/$defs/NonEmptyString" },
+        "verdict_tier": { "$ref": "#/$defs/VerdictTier" },
+        "os": { "$ref": "#/$defs/NonEmptyString" },
+        "cpu": { "$ref": "#/$defs/NonEmptyString" },
+        "ram_gb": { "$ref": "#/$defs/MemoryGb" },
+        "accelerator": { "$ref": "#/$defs/NonEmptyString" },
+        "accelerator_memory_gb": { "$ref": "#/$defs/MemoryGb" },
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "description": "Human-readable physical/operational facts about this profile."
+        },
+        "match": { "$ref": "#/$defs/MatchConstraints" }
+      }
+    }
+  }
+}

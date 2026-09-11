@@ -159,7 +159,10 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
     for field_name in ("profile_id", "role", "os", "cpu", "accelerator"):
         if not _is_valid_text(raw[field_name]):
             raise ValueError(f"invalid hardware profile field: {field_name}")
-    if raw["verdict_tier"] not in {"mac", "windows", "shared"}:
+    if (
+        not isinstance(raw["verdict_tier"], str)
+        or raw["verdict_tier"] not in {"mac", "windows", "shared"}
+    ):
         raise ValueError(f"invalid verdict tier: {raw['verdict_tier']!r}")
     for field_name in ("ram_gb", "accelerator_memory_gb"):
         if not _is_valid_memory_gb(raw[field_name]):

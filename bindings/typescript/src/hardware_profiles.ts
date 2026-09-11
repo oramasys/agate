@@ -1,7 +1,7 @@
 import Ajv2020 from "ajv/dist/2020.js";
 import { type ErrorObject } from "ajv/dist/2020.js";
 
-import hardwareProfilesSchema from "../../../schemas/hardware_profiles.schema.json" with { type: "json" };
+import hardwareProfilesSchema from "../schemas/hardware_profiles.schema.json" with { type: "json" };
 
 export type VerdictTier = "mac" | "windows" | "shared";
 
@@ -79,4 +79,3 @@ export function parseHardwareProfileDatabase(value: unknown): HardwareProfileDat
   }
   return database;
 }
-

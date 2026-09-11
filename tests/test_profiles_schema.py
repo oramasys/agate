@@ -19,6 +19,9 @@ from agate import load_profile_store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO_ROOT / "schemas" / "hardware_profiles.schema.json"
+BINDING_SCHEMA_PATH = (
+    REPO_ROOT / "bindings" / "typescript" / "schemas" / "hardware_profiles.schema.json"
+)
 REAL_DATABASE_PATH = REPO_ROOT / "src" / "agate" / "data" / "hardware_profiles.json"
 
 SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -66,6 +69,11 @@ def test_real_profile_database_validates_against_the_real_schema() -> None:
     load_profile_store(REAL_DATABASE_PATH)
 
 
+def test_typescript_schema_projection_matches_the_canonical_schema() -> None:
+    """The package asset must stay byte-for-byte aligned with the authority."""
+    assert BINDING_SCHEMA_PATH.read_bytes() == SCHEMA_PATH.read_bytes()
+
+
 # (label, mutate) pairs: mutate receives a deep copy of VALID_PROFILE and
 # distorts it. "invalid" fixtures must be rejected by BOTH the schema and the
 # loader; "valid" fixtures must be accepted by BOTH.
@@ -95,6 +103,8 @@ CORPUS: list[tuple[str, bool, Any]] = [
     ("boolean match accelerator_memory_gb", False, lambda p: p.update(match={"accelerator_memory_gb": False})),
     ("verdict tier outside vocabulary", False, lambda p: p.update(verdict_tier="linux")),
     ("verdict tier case mismatch", False, lambda p: p.update(verdict_tier="Mac")),
+    ("verdict tier array", False, lambda p: p.update(verdict_tier=["mac"])),
+    ("verdict tier object", False, lambda p: p.update(verdict_tier={"tier": "mac"})),
     ("missing required field", False, lambda p: p.pop("ram_gb")),
     ("empty profile_id", False, lambda p: p.update(profile_id="")),
     ("whitespace-only cpu", False, lambda p: p.update(cpu="  ")),
