@@ -57,7 +57,7 @@ _INTEGER_MATCH_FIELDS = {"ram_gb", "accelerator_memory_gb"}
 _MATCH_FIELDS = _STRING_MATCH_FIELDS | _INTEGER_MATCH_FIELDS
 
 
-def _read_database(path: Path | str | None) -> dict[str, Any]:
+def _read_database(path: Path | str | None) -> Any:
     if path is not None:
         with Path(path).open(encoding="utf-8") as handle:
             return json.load(handle)
@@ -71,7 +71,20 @@ def _read_database(path: Path | str | None) -> dict[str, Any]:
         return json.load(handle)
 
 
+def _is_valid_memory_gb(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 1
+
+
+def _is_valid_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
+    # Keep in parity with schemas/hardware_profiles.schema.json (Draft 2020-12):
+    # the schema is the contract, this loader is one enforcement of it, and
+    # tests assert both accept and reject the same corpus.
+    if not isinstance(raw, dict):
+        raise ValueError("hardware profile must be an object")
     required = {
         "profile_id", "role", "verdict_tier", "os", "cpu", "ram_gb",
         "accelerator", "accelerator_memory_gb", "match",
@@ -79,32 +92,37 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
     missing = required - raw.keys()
     if missing:
         raise ValueError(f"hardware profile missing required fields: {sorted(missing)}")
+    if raw.keys() - required - {"notes"}:
+        raise ValueError(f"hardware profile has unsupported fields: {sorted(raw.keys() - required - {'notes'})}")
+    for field_name in ("profile_id", "role", "os", "cpu", "accelerator"):
+        if not _is_valid_text(raw[field_name]):
+            raise ValueError(f"invalid hardware profile field: {field_name}")
     if raw["verdict_tier"] not in {"mac", "windows", "shared"}:
         raise ValueError(f"invalid verdict tier: {raw['verdict_tier']!r}")
+    for field_name in ("ram_gb", "accelerator_memory_gb"):
+        if not _is_valid_memory_gb(raw[field_name]):
+            raise ValueError(f"invalid hardware profile memory value: {field_name}")
+    notes = raw.get("notes", [])
+    if not isinstance(notes, list) or any(not _is_valid_text(note) for note in notes):
+        raise ValueError("invalid hardware profile notes")
     if not isinstance(raw["match"], dict):
         raise ValueError("hardware profile match must be an object")
     match = raw["match"]
     if not match or match.keys() - _MATCH_FIELDS:
         raise ValueError("invalid hardware profile match constraints")
     for field_name in _STRING_MATCH_FIELDS:
-        if field_name in match and (
-            not isinstance(match[field_name], str) or not match[field_name].strip()
-        ):
+        if field_name in match and not _is_valid_text(match[field_name]):
             raise ValueError(f"invalid hardware profile match value: {field_name}")
     for field_name in _INTEGER_MATCH_FIELDS:
-        if field_name in match and (
-            isinstance(match[field_name], bool)
-            or not isinstance(match[field_name], int)
-            or match[field_name] < 0
-        ):
+        if field_name in match and not _is_valid_memory_gb(match[field_name]):
             raise ValueError(f"invalid hardware profile match value: {field_name}")
     return HardwareProfile(
-        profile_id=str(raw["profile_id"]), role=str(raw["role"]),
-        verdict_tier=str(raw["verdict_tier"]), os=str(raw["os"]),
-        cpu=str(raw["cpu"]), ram_gb=int(raw["ram_gb"]),
-        accelerator=str(raw["accelerator"]),
-        accelerator_memory_gb=int(raw["accelerator_memory_gb"]),
-        notes=tuple(str(note) for note in raw.get("notes", [])),
+        profile_id=raw["profile_id"], role=raw["role"],
+        verdict_tier=raw["verdict_tier"], os=raw["os"],
+        cpu=raw["cpu"], ram_gb=raw["ram_gb"],
+        accelerator=raw["accelerator"],
+        accelerator_memory_gb=raw["accelerator_memory_gb"],
+        notes=tuple(notes),
         match=dict(match),
     )
 
@@ -112,9 +130,17 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
 def load_profile_store(path: Path | str | None = None) -> ProfileStore:
     """Load an editable portable profile database or the package default."""
     raw = _read_database(path)
-    if raw.get("version") != 1:
+    if not isinstance(raw, dict):
+        raise ValueError("profile database must be a JSON object")
+    if raw.keys() - {"version", "profiles"}:
+        raise ValueError(f"profile database has unsupported fields: {sorted(raw.keys() - {'version', 'profiles'})}")
+    version = raw.get("version")
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
         raise ValueError(f"unsupported profile database version: {raw.get('version')!r}")
-    profiles = [_parse_profile(item) for item in raw.get("profiles", [])]
+    raw_profiles = raw.get("profiles")
+    if not isinstance(raw_profiles, list):
+        raise ValueError("profile database profiles must be an array")
+    profiles = [_parse_profile(item) for item in raw_profiles]
     by_id = {profile.profile_id: profile for profile in profiles}
     if not by_id or len(by_id) != len(profiles):
         raise ValueError("profile database must contain uniquely named profiles")
