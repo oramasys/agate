@@ -2,13 +2,12 @@
 
 First real implementation. Covers the part of the contract that was
 already fully specified in the schema and README: loading a
-model_hardware_policy.yml and answering PREFER/ALLOW/NEVER for a known
-physical profile. Does not yet implement hardware detection (Phase-2
-design work, not yet decided), the PROFILE_UNDERUSE reason code (exact
-shape is an open decision for the repo owner), or machine-level
-concurrency-safety enforcement (also an open scope decision) -- see
-docs/mhs-local-metal-convergence.md and the synthesized migration plan
-for what remains open.
+model_hardware_policy.yml, collecting best-effort local observations on macOS
+and Windows, and answering PREFER/ALLOW/NEVER for a known physical profile.
+Observation never rewrites policy or proves a host profile by itself. The
+PROFILE_UNDERUSE reason code (exact shape is an open decision for the repo
+owner) and machine-level concurrency-safety enforcement remain deferred -- see
+docs/mhs-local-metal-convergence.md and the synthesized migration plan.
 """
 from .policy import (
     HardwareAffinityError,

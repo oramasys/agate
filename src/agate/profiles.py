@@ -55,6 +55,15 @@ _PROFILE_DATABASE_ENV = "AGATE_PROFILE_DATABASE"
 _STRING_MATCH_FIELDS = {"os", "cpu_contains", "accelerator_contains"}
 _INTEGER_MATCH_FIELDS = {"ram_gb", "accelerator_memory_gb"}
 _MATCH_FIELDS = _STRING_MATCH_FIELDS | _INTEGER_MATCH_FIELDS
+_WINDOWS_HARDWARE_COMMAND = (
+    "$cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 "
+    "-ExpandProperty Name); "
+    "$system = Get-CimInstance Win32_ComputerSystem; "
+    "$gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1; "
+    "[PSCustomObject]@{cpu=$cpu;ram_gb=[math]::Round($system.TotalPhysicalMemory "
+    "/ 1GB);accelerator=$gpu.Name;accelerator_memory_gb=[math]::Round($gpu.AdapterRAM "
+    "/ 1GB)} | ConvertTo-Json -Compress"
+)
 
 
 def _read_database(path: Path | str | None) -> Any:
@@ -77,6 +86,59 @@ def _is_valid_memory_gb(value: Any) -> bool:
 
 def _is_valid_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _observed_positive_integer(value: object) -> int | None:
+    """Return a whole positive observed capacity without coercing strings/bools."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 1:
+        return value
+    if isinstance(value, float) and value.is_integer() and value >= 1:
+        return int(value)
+    return None
+
+
+def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
+    """Collect local Windows hardware facts through CIM without network I/O."""
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                _WINDOWS_HARDWARE_COMMAND,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        data = json.loads(result.stdout)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        return HardwareObservation(os="Windows", cpu=fallback_cpu)
+
+    if not isinstance(data, dict):
+        return HardwareObservation(os="Windows", cpu=fallback_cpu)
+
+    cpu = data.get("cpu")
+    accelerator = data.get("accelerator")
+    return HardwareObservation(
+        os="Windows",
+        cpu=cpu if _is_valid_text(cpu) else fallback_cpu,
+        ram_gb=_observed_positive_integer(data.get("ram_gb")),
+        accelerator=accelerator if _is_valid_text(accelerator) else None,
+        accelerator_memory_gb=_observed_positive_integer(
+            data.get("accelerator_memory_gb")
+        ),
+    )
 
 
 def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
@@ -193,6 +255,9 @@ def observe_local_hardware() -> HardwareObservation:
     system = platform.system()
     os_name = {"Darwin": "macOS", "Windows": "Windows"}.get(system, system or None)
     cpu = platform.processor() or platform.machine() or None
+    if system == "Windows":
+        return _observe_windows_hardware(cpu)
+
     try:
         ram_gb = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30)
     except (AttributeError, OSError, ValueError):

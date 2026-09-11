@@ -129,6 +129,12 @@ evidence matches every configured identity field; incomplete or conflicting
 evidence returns `None` rather than guessing. This keeps runtime observation,
 operator-editable specifications, and model-fit policy separate.
 
+On Windows, observation uses local PowerShell/CIM queries with `-NoProfile` and
+`-NonInteractive`. Failed commands, malformed output, and unusable capacity
+values yield incomplete evidence rather than a profile claim. A real Windows
+canary remains an operator-run evidence step; automated tests use only synthetic
+command output.
+
 Explicitly not yet implemented, because the design decisions they depend
 on are genuinely open, not because they were forgotten:
 
