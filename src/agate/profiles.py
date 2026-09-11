@@ -52,6 +52,9 @@ class ProfileStore:
 
 _DEFAULT_PROFILE_RESOURCE = "data/hardware_profiles.json"
 _PROFILE_DATABASE_ENV = "AGATE_PROFILE_DATABASE"
+_STRING_MATCH_FIELDS = {"os", "cpu_contains", "accelerator_contains"}
+_INTEGER_MATCH_FIELDS = {"ram_gb", "accelerator_memory_gb"}
+_MATCH_FIELDS = _STRING_MATCH_FIELDS | _INTEGER_MATCH_FIELDS
 
 
 def _read_database(path: Path | str | None) -> dict[str, Any]:
@@ -80,6 +83,21 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
         raise ValueError(f"invalid verdict tier: {raw['verdict_tier']!r}")
     if not isinstance(raw["match"], dict):
         raise ValueError("hardware profile match must be an object")
+    match = raw["match"]
+    if not match or match.keys() - _MATCH_FIELDS:
+        raise ValueError("invalid hardware profile match constraints")
+    for field_name in _STRING_MATCH_FIELDS:
+        if field_name in match and (
+            not isinstance(match[field_name], str) or not match[field_name].strip()
+        ):
+            raise ValueError(f"invalid hardware profile match value: {field_name}")
+    for field_name in _INTEGER_MATCH_FIELDS:
+        if field_name in match and (
+            isinstance(match[field_name], bool)
+            or not isinstance(match[field_name], int)
+            or match[field_name] < 0
+        ):
+            raise ValueError(f"invalid hardware profile match value: {field_name}")
     return HardwareProfile(
         profile_id=str(raw["profile_id"]), role=str(raw["role"]),
         verdict_tier=str(raw["verdict_tier"]), os=str(raw["os"]),
@@ -87,7 +105,7 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
         accelerator=str(raw["accelerator"]),
         accelerator_memory_gb=int(raw["accelerator_memory_gb"]),
         notes=tuple(str(note) for note in raw.get("notes", [])),
-        match=dict(raw["match"]),
+        match=dict(match),
     )
 
 

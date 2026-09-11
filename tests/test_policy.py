@@ -201,3 +201,46 @@ def test_the_three_profiles_have_correct_verdict_tier_mapping() -> None:
     assert WIN_RTX3080.verdict_tier == "windows"
     assert WIN_RTX5080.verdict_tier == "windows"
     assert WIN_RTX3080.profile_id != WIN_RTX5080.profile_id
+
+
+@pytest.mark.parametrize(
+    "match",
+    [
+        {},
+        {"os_name": "Windows"},
+        {"os": 1},
+        {"cpu_contains": 1},
+        {"ram_gb": "32"},
+        {"accelerator_contains": []},
+        {"accelerator_memory_gb": True},
+    ],
+)
+def test_profile_database_rejects_invalid_match_schema(
+    match: object, tmp_path: Path
+) -> None:
+    """No editable profile may match without validated hardware evidence."""
+    path = tmp_path / "invalid-profile-database.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profiles": [
+                    {
+                        "profile_id": "invalid",
+                        "role": "test",
+                        "verdict_tier": "mac",
+                        "os": "macOS",
+                        "cpu": "test",
+                        "ram_gb": 1,
+                        "accelerator": "test",
+                        "accelerator_memory_gb": 1,
+                        "match": match,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid hardware profile match"):
+        load_profile_store(path)
