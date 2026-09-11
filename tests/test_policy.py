@@ -8,12 +8,15 @@ import pytest
 import yaml
 
 from agate import (
+    HardwareObservation,
     MAC_STUDIO,
     WIN_RTX3080,
     WIN_RTX5080,
     HardwareAffinityError,
     get_profile,
+    identify_profile,
     load_policy,
+    load_profile_store,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +62,13 @@ def test_real_policy_loads_and_matches_migrated_pt_data() -> None:
     # Shared model with an asymmetric native/proxied relationship.
     assert store.verdict("qwen3.5-9b-mlx", MAC_STUDIO) == "PREFER"
     assert store.verdict("qwen3.5-9b-mlx", WIN_RTX3080) == "ALLOW"
+
+
+def test_packaged_default_policy_loads_without_a_repository_relative_path() -> None:
+    """Installed consumers must receive the default policy in the wheel."""
+    store = load_policy()
+
+    assert "qwen3.5:9b-nvfp4" in store.models
 
 
 def test_decide_raises_hardware_affinity_error_on_never() -> None:
@@ -107,7 +117,7 @@ def test_preferred_model_respects_forbidding_verdict() -> None:
         windows: ALLOW
         shared: PREFER
     routing:
-      default: fallback-model
+      default: mac-only-model
     """
     import tempfile
 
@@ -116,8 +126,8 @@ def test_preferred_model_respects_forbidding_verdict() -> None:
         path = f.name
 
     store = load_policy(path)
-    # A profile this default model is fine for.
-    assert store.preferred_model("mac-studio") == "fallback-model"
+    assert store.preferred_model("mac-studio") == "mac-only-model"
+    assert store.preferred_model("win-rtx3080") is None
 
     Path(path).unlink()
 
@@ -148,6 +158,38 @@ def test_load_policy_rejects_routing_referencing_unknown_model() -> None:
         load_policy(path)
 
     Path(path).unlink()
+
+
+@pytest.mark.parametrize("invalid_verdict", ["NEVRE", "prefer", 1])
+def test_load_policy_rejects_invalid_verdicts(invalid_verdict: object, tmp_path: Path) -> None:
+    path = tmp_path / "invalid.yml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "models": {"bad-model": {"mac": invalid_verdict}},
+                "routing": {"default": "bad-model"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid verdict"):
+        load_policy(path)
+
+
+def test_profile_database_is_plaintext_and_identifies_a_matching_observation() -> None:
+    store = load_profile_store()
+    profile = store.profiles["win-rtx3080"]
+    observation = HardwareObservation(
+        os="Windows 11 Pro",
+        cpu="Intel Core i9-12900",
+        ram_gb=32,
+        accelerator="NVIDIA GeForce RTX 3080",
+        accelerator_memory_gb=10,
+    )
+
+    assert identify_profile(observation) == profile
 
 
 def test_the_three_profiles_have_correct_verdict_tier_mapping() -> None:

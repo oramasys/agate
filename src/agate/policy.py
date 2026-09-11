@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Literal
 
@@ -28,7 +29,8 @@ from .profiles import HardwareProfile, get_profile
 
 Verdict = Literal["PREFER", "ALLOW", "NEVER"]
 
-_DEFAULT_POLICY_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "model_hardware_policy.yml"
+_DEFAULT_POLICY_RESOURCE = "data/model_hardware_policy.yml"
+_VALID_VERDICTS = frozenset({"PREFER", "ALLOW", "NEVER"})
 
 
 class HardwareAffinityError(RuntimeError):
@@ -106,11 +108,20 @@ class PolicyStore:
 
 
 def _parse_model_spec(name: str, raw: dict) -> ModelSpec:
+    def verdict_for(field: str) -> Verdict:
+        verdict = raw.get(field, "NEVER")
+        if verdict not in _VALID_VERDICTS:
+            raise ValueError(
+                f"invalid verdict for model {name!r}, tier {field!r}: {verdict!r}; "
+                f"expected one of {sorted(_VALID_VERDICTS)}"
+            )
+        return verdict
+
     return ModelSpec(
         name=name,
-        mac=raw.get("mac", "NEVER"),
-        windows=raw.get("windows", "NEVER"),
-        shared=raw.get("shared", "NEVER"),
+        mac=verdict_for("mac"),
+        windows=verdict_for("windows"),
+        shared=verdict_for("shared"),
         context=raw.get("context"),
         roles=tuple(raw.get("roles", [])),
         notes=raw.get("notes"),
@@ -123,9 +134,13 @@ def load_policy(path: Path | str | None = None) -> PolicyStore:
     No caching here -- see load_policy_cached() for the process-wide
     cached accessor most callers should use instead.
     """
-    resolved = Path(path) if path is not None else _DEFAULT_POLICY_PATH
-    with open(resolved, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+    if path is None:
+        resource = resources.files("agate").joinpath(_DEFAULT_POLICY_RESOURCE)
+        with resource.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+    else:
+        with Path(path).open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
 
     if raw.get("version") != 1:
         raise ValueError(f"unsupported policy schema version: {raw.get('version')!r}")

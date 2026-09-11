@@ -1,114 +1,186 @@
-"""Agate's physical fleet profile registry.
+"""Portable hardware-profile data, observation, and identity matching.
 
-These are the three canonical, proven fleet profiles this session's own
-recall of PT's evidence (config/devices.yml, model-affinity tests, live
-operational lessons) and the exact hardware specs supplied directly both
-confirm. Not planned, not roadmap items -- each has direct operational
-evidence: onboarding, loaded models, routing tests, live incidents.
-
-Each profile maps to exactly one of agate's schema-level verdict tiers
-(mac / windows / shared) for model-policy lookups, since the current
-schema (schemas/model_hardware_policy.schema.json, v1) only supports
-those three generic keys -- it has no notion of "win-rtx3080" vs
-"win-rtx5080" as distinct verdict-bearing identities. That is a real,
-known limitation, not silently worked around: PROFILES below keeps the
-two Windows machines as distinct physical identities for capacity and
-detection purposes, while model-policy verdicts (see policy.py) can only
-be as granular as the v1 schema allows until a v2 schema decision is
-made. Do not assume verdict-tier resolution distinguishes the two
-Windows profiles -- it currently cannot.
+Profile specifications are data, not Python constants. The package ships a
+conservative default database and an operator can select an editable JSON file
+with ``AGATE_PROFILE_DATABASE``. A live observation is evidence only: it is
+matched against the database but never rewrites operator policy or profile data.
 """
 from __future__ import annotations
 
+import json
+import os
+import platform
+import subprocess
 from dataclasses import dataclass, field
+from importlib import resources
+from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class HardwareProfile:
-    """A proven physical fleet profile."""
+    """A named physical profile loaded from the portable profile database."""
 
     profile_id: str
     role: str
-    verdict_tier: str  # the schema-level key this profile resolves to: mac | windows | shared
+    verdict_tier: str
     os: str
     cpu: str
     ram_gb: int
     accelerator: str
     accelerator_memory_gb: int
     notes: tuple[str, ...] = field(default_factory=tuple)
+    match: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
-MAC_STUDIO = HardwareProfile(
-    profile_id="mac-studio",
-    role="Primary Orchestrator",
-    verdict_tier="mac",
-    os="macOS",
-    cpu="Apple M2 Pro (10-core CPU, 16-core GPU)",
-    ram_gb=16,
-    accelerator="Apple Silicon unified memory",
-    accelerator_memory_gb=16,
-    notes=(
-        "16 GB unified memory shared between CPU and GPU, not a separate VRAM pool.",
-        "Preferred runtime: Ollama. MLX native lane available. LM Studio is "
-        "mirror-only, excluded from dispatch (lesson_f60e9a3a7ade / "
-        "lesson_0baf339c8840).",
-        "CLOSED, NEVER-REOPEN safety constraint: never run Ollama and LM "
-        "Studio under real concurrent heavy inference load on this machine "
-        "-- confirmed prior overheat/force-shutdown incident "
-        "(lesson_f60e9a3a7ade). Light-to-moderate single-request concurrency "
-        "is a separate, narrower claim (lesson_fba170814ea7) and does not "
-        "license heavy concurrent load.",
-    ),
-)
+@dataclass(frozen=True, slots=True)
+class HardwareObservation:
+    """Best-effort locally observed hardware facts, kept distinct from policy."""
 
-WIN_RTX3080 = HardwareProfile(
-    profile_id="win-rtx3080",
-    role="Windows AutoResearcher 1 / co-Orchestrator",
-    verdict_tier="windows",
-    os="Windows 11 Pro",
-    cpu="Intel Core i9-12900",
-    ram_gb=32,
-    accelerator="NVIDIA GeForce RTX 3080 (Ampere, 8704 CUDA cores)",
-    accelerator_memory_gb=10,
-    notes=(
-        "10 GB GDDR6X, 320-bit bus, 320 W -- confirmed against the real "
-        "product spec sheet, resolving an earlier conflict between PT's "
-        "config (10 GB, correct) and a v2 kernel-spec draft (24 GB, wrong).",
-        "Preferred runtime: LM Studio, Ollama secondary.",
-        "Endpoint identity must be live-resolved, never trusted from a "
-        "cached or recently-written value -- DHCP IP drift confirmed "
-        "directly (lesson_be16e0517158).",
-    ),
-)
-
-WIN_RTX5080 = HardwareProfile(
-    profile_id="win-rtx5080",
-    role="Windows AutoResearcher 2 / co-Orchestrator",
-    verdict_tier="windows",
-    os="Windows 11 Pro",
-    cpu="Intel Core Ultra 7 265KF (20C/20T, 3.9 GHz)",
-    ram_gb=32,
-    accelerator="NVIDIA GeForce RTX 5080 PRIME",
-    accelerator_memory_gb=16,
-    notes=(
-        "Liquid-cooled, 1000 W Gold PSU.",
-        "Preferred runtime: LM Studio.",
-        "A distinct physical identity from win-rtx3080 -- both resolve to "
-        "the same schema verdict_tier (windows) today, a known v1-schema "
-        "limitation, not an intentional merging of their model fit.",
-    ),
-)
-
-PROFILES: dict[str, HardwareProfile] = {
-    p.profile_id: p for p in (MAC_STUDIO, WIN_RTX3080, WIN_RTX5080)
-}
+    os: str | None = None
+    cpu: str | None = None
+    ram_gb: int | None = None
+    accelerator: str | None = None
+    accelerator_memory_gb: int | None = None
 
 
-def get_profile(profile_id: str) -> HardwareProfile:
+@dataclass(frozen=True, slots=True)
+class ProfileStore:
+    version: int
+    profiles: dict[str, HardwareProfile]
+
+
+_DEFAULT_PROFILE_RESOURCE = "data/hardware_profiles.json"
+_PROFILE_DATABASE_ENV = "AGATE_PROFILE_DATABASE"
+
+
+def _read_database(path: Path | str | None) -> dict[str, Any]:
+    if path is not None:
+        with Path(path).open(encoding="utf-8") as handle:
+            return json.load(handle)
+
+    override = os.environ.get(_PROFILE_DATABASE_ENV)
+    if override:
+        return _read_database(override)
+
+    resource = resources.files("agate").joinpath(_DEFAULT_PROFILE_RESOURCE)
+    with resource.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
+    required = {
+        "profile_id", "role", "verdict_tier", "os", "cpu", "ram_gb",
+        "accelerator", "accelerator_memory_gb", "match",
+    }
+    missing = required - raw.keys()
+    if missing:
+        raise ValueError(f"hardware profile missing required fields: {sorted(missing)}")
+    if raw["verdict_tier"] not in {"mac", "windows", "shared"}:
+        raise ValueError(f"invalid verdict tier: {raw['verdict_tier']!r}")
+    if not isinstance(raw["match"], dict):
+        raise ValueError("hardware profile match must be an object")
+    return HardwareProfile(
+        profile_id=str(raw["profile_id"]), role=str(raw["role"]),
+        verdict_tier=str(raw["verdict_tier"]), os=str(raw["os"]),
+        cpu=str(raw["cpu"]), ram_gb=int(raw["ram_gb"]),
+        accelerator=str(raw["accelerator"]),
+        accelerator_memory_gb=int(raw["accelerator_memory_gb"]),
+        notes=tuple(str(note) for note in raw.get("notes", [])),
+        match=dict(raw["match"]),
+    )
+
+
+def load_profile_store(path: Path | str | None = None) -> ProfileStore:
+    """Load an editable portable profile database or the package default."""
+    raw = _read_database(path)
+    if raw.get("version") != 1:
+        raise ValueError(f"unsupported profile database version: {raw.get('version')!r}")
+    profiles = [_parse_profile(item) for item in raw.get("profiles", [])]
+    by_id = {profile.profile_id: profile for profile in profiles}
+    if not by_id or len(by_id) != len(profiles):
+        raise ValueError("profile database must contain uniquely named profiles")
+    return ProfileStore(version=1, profiles=by_id)
+
+
+def get_profile(profile_id: str, path: Path | str | None = None) -> HardwareProfile:
+    profiles = load_profile_store(path).profiles
     try:
-        return PROFILES[profile_id]
+        return profiles[profile_id]
     except KeyError:
         raise KeyError(
-            f"unknown hardware profile: {profile_id!r}. Known profiles: "
-            f"{sorted(PROFILES)}"
+            f"unknown hardware profile: {profile_id!r}. Known profiles: {sorted(profiles)}"
         ) from None
+
+
+def _contains(observed: str | None, expected: object) -> bool:
+    return observed is not None and str(expected).casefold() in observed.casefold()
+
+
+def _matches(profile: HardwareProfile, observation: HardwareObservation) -> bool:
+    match = profile.match
+    if "os" in match and observation.os != match["os"]:
+        return False
+    if "cpu_contains" in match and not _contains(observation.cpu, match["cpu_contains"]):
+        return False
+    if "ram_gb" in match and observation.ram_gb != match["ram_gb"]:
+        return False
+    if "accelerator_contains" in match and not _contains(observation.accelerator, match["accelerator_contains"]):
+        return False
+    if "accelerator_memory_gb" in match and observation.accelerator_memory_gb != match["accelerator_memory_gb"]:
+        return False
+    return True
+
+
+def identify_profile(observation: HardwareObservation, path: Path | str | None = None) -> HardwareProfile | None:
+    """Return one verified profile, or ``None`` when evidence is incomplete."""
+    matches = [profile for profile in load_profile_store(path).profiles.values() if _matches(profile, observation)]
+    if len(matches) > 1:
+        raise ValueError(f"hardware observation matches multiple profiles: {[p.profile_id for p in matches]}")
+    return matches[0] if matches else None
+
+
+def observe_local_hardware() -> HardwareObservation:
+    """Collect best-effort local facts without network or provider I/O.
+
+    A failed platform collector leaves evidence incomplete; it never claims a
+    profile. Python/shell callers can instead supply a maintained JSON database.
+    """
+    system = platform.system()
+    os_name = {"Darwin": "macOS", "Windows": "Windows"}.get(system, system or None)
+    cpu = platform.processor() or platform.machine() or None
+    try:
+        ram_gb = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30)
+    except (AttributeError, OSError, ValueError):
+        ram_gb = None
+    accelerator: str | None = None
+    accelerator_memory_gb: int | None = None
+
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
+            data = json.loads(result.stdout)
+            hardware = data.get("SPHardwareDataType", [{}])[0]
+            displays = data.get("SPDisplaysDataType", [{}])
+            cpu = hardware.get("chip_type") or hardware.get("cpu_type") or cpu
+            accelerator = displays[0].get("sppci_model") if displays else None
+            memory = displays[0].get("spdisplays_vram") if displays else None
+            if isinstance(memory, str):
+                digits = "".join(char for char in memory if char.isdigit())
+                accelerator_memory_gb = int(digits) if digits else None
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError, KeyError):
+            pass
+
+    return HardwareObservation(os_name, cpu, ram_gb, accelerator, accelerator_memory_gb)
+
+
+# Compatibility exports remain data-derived. Runtime decisions use get_profile(),
+# so an operator-selected database is consulted at decision time.
+_DEFAULT_PROFILES = load_profile_store().profiles
+MAC_STUDIO = _DEFAULT_PROFILES["mac-studio"]
+WIN_RTX3080 = _DEFAULT_PROFILES["win-rtx3080"]
+WIN_RTX5080 = _DEFAULT_PROFILES["win-rtx5080"]
+PROFILES = _DEFAULT_PROFILES

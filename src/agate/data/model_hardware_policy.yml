@@ -1,0 +1,55 @@
+# Package default. For deployment-specific edits, copy this portable YAML file
+# and load it explicitly; it is intentionally independent of repository layout.
+version: 1
+
+metadata:
+  owner: oramasys/agate
+  last_updated: "2026-09-11"
+
+models:
+  qwen3.5:9b-nvfp4:
+    mac: PREFER
+    windows: NEVER
+    shared: NEVER
+    roles: [orchestration, inference]
+    notes: Mac-native NVFP4 quantization.
+  bge-m3:
+    mac: PREFER
+    windows: NEVER
+    shared: NEVER
+    roles: [embeddings]
+    notes: 1024-dimension embeddings for gbrain/CRG.
+  qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2:
+    mac: NEVER
+    windows: PREFER
+    shared: NEVER
+    context: 16384
+    roles: [coder, checker, refiner, executor, verifier]
+    notes: Heavy reasoning/coder lane; requires the verified Windows GGUF offload path.
+  gemma-4-26b-a4b-it:
+    mac: NEVER
+    windows: PREFER
+    shared: NEVER
+    roles: [reasoning]
+    notes: Large RTX GGUF reasoning lane.
+  text-embedding-qwen3-embedding-8b-i1-gguf-q6-k:
+    mac: NEVER
+    windows: PREFER
+    shared: NEVER
+    roles: [embeddings]
+    notes: 4096-dimension embedding lane for Windows LM Studio.
+  qwen3.5-9b-mlx:
+    mac: PREFER
+    windows: ALLOW
+    shared: PREFER
+    roles: [fallback, lightweight-ops]
+    notes: Native on Mac MLX; proxied Windows use is an allowed fallback.
+  gemma-4-e4b-it:
+    mac: PREFER
+    windows: PREFER
+    shared: PREFER
+    roles: [fallback, lightweight-ops]
+    notes: Confirmed lightweight fallback on both proven hardware lanes.
+
+routing:
+  default: qwen3.5-9b-mlx

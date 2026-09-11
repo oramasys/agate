@@ -19,12 +19,17 @@ from .policy import (
     load_policy_cached,
 )
 from .profiles import (
+    HardwareObservation,
     MAC_STUDIO,
     PROFILES,
     WIN_RTX3080,
     WIN_RTX5080,
     HardwareProfile,
+    ProfileStore,
     get_profile,
+    identify_profile,
+    load_profile_store,
+    observe_local_hardware,
 )
 
 __all__ = [
@@ -39,7 +44,12 @@ __all__ = [
     "WIN_RTX3080",
     "WIN_RTX5080",
     "HardwareProfile",
+    "HardwareObservation",
+    "ProfileStore",
     "get_profile",
+    "identify_profile",
+    "load_profile_store",
+    "observe_local_hardware",
 ]
 
 __version__ = "0.1.0"

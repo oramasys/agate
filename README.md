@@ -114,24 +114,30 @@ Future MHS interoperability, if adopted, should be an adapter/profile over the s
 
 `src/agate/` is the first real implementation of this contract: loading a
 schema-conformant `model_hardware_policy.yml`, resolving a named physical
-profile (`src/agate/profiles.py` holds the three proven fleet profiles —
-mac-studio, win-rtx3080, win-rtx5080) against a model, and returning
+profile (the portable `src/agate/data/hardware_profiles.json` catalog holds the
+three proven fleet profiles — mac-studio, win-rtx3080, win-rtx5080) against a
+model, and returning
 `PREFER`/`ALLOW`/`NEVER` with fail-closed behavior for unknown models.
-`config/model_hardware_policy.yml` is real seed data, migrated from
-Perpetua-Tools' actual operational policy, not placeholder content.
+The default policy is packaged in the wheel; `config/model_hardware_policy.yml`
+is a readable, editable deployment template. Set `AGATE_PROFILE_DATABASE` to an
+operator-maintained JSON catalog when the local fleet differs from the packaged
+defaults.
+
+`observe_local_hardware()` collects local, best-effort physical evidence without
+provider or network I/O. `identify_profile()` only returns a profile when that
+evidence matches every configured identity field; incomplete or conflicting
+evidence returns `None` rather than guessing. This keeps runtime observation,
+operator-editable specifications, and model-fit policy separate.
 
 Explicitly not yet implemented, because the design decisions they depend
 on are genuinely open, not because they were forgotten:
 
-- **Hardware detection.** Nothing in this repo yet inspects a live host's
-  actual VRAM, unified memory, or accelerator identity. `profiles.py`'s
-  three profiles are hand-entered from verified specs, not detected.
 - **The "too small / overqualified" verdict** (`PROFILE_UNDERUSE`). No
   numeric threshold or scoping rule has been decided — this needs the
   repo owner's input, not an invented default.
-- **Machine-level concurrency/thermal safety** (e.g. the mac-studio
-  concurrent-heavy-engine prohibition, documented in `profiles.py`'s
-  notes) is recorded as evidence but not yet enforced by any code path.
+- **Machine-level concurrency/thermal safety.** The mac-studio
+  concurrent-heavy-engine prohibition is preserved in portable profile data,
+  but its admission/capacity enforcement remains a separate policy plane.
 - **win-rtx3080 vs win-rtx5080** currently resolve to the same schema
   verdict tier (`windows`) — the v1 schema has no way to express them as
   separately-verdicted identities. A real, open question for a future
