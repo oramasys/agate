@@ -33,21 +33,21 @@ from .profiles import (
 )
 
 __all__ = [
-    "HardwareAffinityError",
-    "ModelSpec",
-    "PolicyStore",
-    "Verdict",
-    "load_policy",
-    "load_policy_cached",
     "MAC_STUDIO",
     "PROFILES",
     "WIN_RTX3080",
     "WIN_RTX5080",
-    "HardwareProfile",
+    "HardwareAffinityError",
     "HardwareObservation",
+    "HardwareProfile",
+    "ModelSpec",
     "ProfileStore",
+    "PolicyStore",
+    "Verdict",
     "get_profile",
     "identify_profile",
+    "load_policy",
+    "load_policy_cached",
     "load_profile_store",
     "observe_local_hardware",
 ]
