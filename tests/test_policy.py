@@ -22,6 +22,7 @@ from agate import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REAL_POLICY_PATH = REPO_ROOT / "config" / "model_hardware_policy.yml"
 SCHEMA_PATH = REPO_ROOT / "schemas" / "model_hardware_policy.schema.json"
+PACKAGED_POLICY_PATH = REPO_ROOT / "src" / "agate" / "data" / "model_hardware_policy.yml"
 
 
 def test_real_policy_file_validates_against_the_real_schema() -> None:
@@ -32,6 +33,12 @@ def test_real_policy_file_validates_against_the_real_schema() -> None:
     with open(REAL_POLICY_PATH) as f:
         data = yaml.safe_load(f)
     jsonschema.validate(data, schema)
+
+
+def test_legacy_policy_path_is_a_relative_alias_of_the_packaged_default() -> None:
+    assert REAL_POLICY_PATH.is_symlink()
+    assert REAL_POLICY_PATH.readlink() == Path("../src/agate/data/model_hardware_policy.yml")
+    assert REAL_POLICY_PATH.resolve() == PACKAGED_POLICY_PATH.resolve()
 
 
 def test_real_policy_loads_and_matches_migrated_pt_data() -> None:
