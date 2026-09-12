@@ -124,10 +124,14 @@ profile (the portable `src/agate/data/hardware_profiles.json` catalog holds the
 three proven fleet profiles — mac-studio, win-rtx3080, win-rtx5080) against a
 model, and returning
 `PREFER`/`ALLOW`/`NEVER` with fail-closed behavior for unknown models.
-The default policy is packaged in the wheel; `config/model_hardware_policy.yml`
-is a readable, editable deployment template. Set `AGATE_PROFILE_DATABASE` to an
-operator-maintained JSON catalog when the local fleet differs from the packaged
-defaults.
+The default policy is packaged in the wheel. In a source checkout,
+`config/model_hardware_policy.yml` is a relative compatibility symlink to
+`src/agate/data/model_hardware_policy.yml`, so both paths always read one
+canonical policy. Preserve symlink support when cloning on Windows. For
+deployment-specific edits, copy the canonical YAML to an operator-controlled
+path and pass that path to `load_policy(path)`. Set `AGATE_PROFILE_DATABASE` to
+an operator-maintained JSON catalog when the local fleet differs from the
+packaged defaults.
 
 `observe_local_hardware()` collects local, best-effort physical evidence without
 provider or network I/O. `identify_profile()` only returns a profile when that
