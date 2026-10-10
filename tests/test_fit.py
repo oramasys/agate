@@ -13,6 +13,7 @@ from agate.fit import FitDecision, assess_fit
 
 
 def observation_for(profile_id: str) -> HardwareObservation:
+    """Test helper: observation for."""
     profile = load_profile_store().profiles[profile_id]
     m = profile.match
     return HardwareObservation(
@@ -25,6 +26,7 @@ def observation_for(profile_id: str) -> HardwareObservation:
 
 
 def pick(policy, profile_id: str, wanted: set[str]) -> str | None:
+    """Test helper: pick."""
     profile = load_profile_store().profiles[profile_id]
     for name, spec in policy.models.items():
         if spec.verdict_for_tier(profile.verdict_tier) in wanted:
@@ -34,10 +36,12 @@ def pick(policy, profile_id: str, wanted: set[str]) -> str | None:
 
 @pytest.fixture(scope="module")
 def policy():
+    """Test helper: policy."""
     return load_policy()
 
 
 def profiles_with(policy, wanted: set[str]):
+    """Test helper: profiles with."""
     for profile_id in load_profile_store().profiles:
         model = pick(policy, profile_id, wanted)
         if model is not None:
@@ -46,6 +50,7 @@ def profiles_with(policy, wanted: set[str]):
 
 
 def test_measured_fit_allows_a_permitted_model(policy):
+    """Measured fit allows a permitted model."""
     profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
     observation = observation_for(profile_id)
     decision = assess_fit(
@@ -59,6 +64,7 @@ def test_measured_fit_allows_a_permitted_model(policy):
 
 
 def test_forbidden_model_is_infeasible_and_not_overridable(policy):
+    """Forbidden model is infeasible and not overridable."""
     profile_id, model = profiles_with(policy, {"NEVER"})
     observation = observation_for(profile_id)
     decision = assess_fit(
@@ -70,6 +76,7 @@ def test_forbidden_model_is_infeasible_and_not_overridable(policy):
 
 
 def test_unknown_model_is_infeasible(policy):
+    """Unknown model is infeasible."""
     profile_id = next(iter(load_profile_store().profiles))
     observation = observation_for(profile_id)
     decision = assess_fit(
@@ -80,6 +87,7 @@ def test_unknown_model_is_infeasible(policy):
 
 
 def test_missing_evidence_refuses_rather_than_defaulting(policy):
+    """Missing evidence refuses rather than defaulting."""
     observation = HardwareObservation()
     decision = assess_fit(
         policy, "any", observation, evidence=FitEvidence.derived(observation)
@@ -91,6 +99,7 @@ def test_missing_evidence_refuses_rather_than_defaulting(policy):
 
 
 def test_ambiguous_evidence_refuses(policy, monkeypatch):
+    """Ambiguous evidence refuses."""
     import agate.fit as fit
 
     monkeypatch.setattr(fit, "_matches", lambda _profile, _obs: True)  # every profile matches
@@ -103,6 +112,7 @@ def test_ambiguous_evidence_refuses(policy, monkeypatch):
 
 
 def test_broken_profile_database_is_an_error_not_ambiguity(policy, tmp_path):
+    """Broken profile database is an error not ambiguity."""
     bad = tmp_path / "profiles.json"
     bad.write_text('{"version": 999, "profiles": []}', encoding="utf-8")
     observation = HardwareObservation(os="macOS")
@@ -117,6 +127,7 @@ def test_broken_profile_database_is_an_error_not_ambiguity(policy, tmp_path):
 
 
 def test_unattested_hardware_observation_is_derived_not_observed(policy):
+    """Unattested hardware observation is derived not observed."""
     profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
     observation = observation_for(profile_id)
     decision = assess_fit(
@@ -126,6 +137,7 @@ def test_unattested_hardware_observation_is_derived_not_observed(policy):
 
 
 def test_collector_evidence_binds_the_observation_digest():
+    """Collector evidence binds the observation digest."""
     observation = observation_for(next(iter(load_profile_store().profiles)))
     clock = lambda: datetime(2026, 10, 11, tzinfo=timezone.utc)
     evidence = FitEvidence.observed(
@@ -136,6 +148,7 @@ def test_collector_evidence_binds_the_observation_digest():
 
 
 def test_fit_decision_has_no_capability_or_claim_operation(policy):
+    """Fit decision has no capability or claim operation."""
     profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
     observation = observation_for(profile_id)
     decision = assess_fit(

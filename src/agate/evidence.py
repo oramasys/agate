@@ -28,12 +28,14 @@ def canonical_observation_digest(observation: HardwareObservation) -> str:
 
 @dataclass(frozen=True, slots=True)
 class FitEvidence:
+    """Hardware evidence class and the observation digest it covers."""
     classification: Literal["observed", "derived"]
     observation_digest: str
     observed_at: datetime | None
     collector: str | None
 
     def __post_init__(self) -> None:
+        """Validate the fields at construction and fail closed on bad input."""
         if self.classification == "observed":
             if not isinstance(self.collector, str) or not self.collector.strip():
                 raise ValueError("observed fit evidence requires a collector identity")
@@ -47,6 +49,7 @@ class FitEvidence:
 
     @classmethod
     def derived(cls, observation: HardwareObservation) -> FitEvidence:
+        """Build evidence derived from, not attested by, the observation."""
         return cls("derived", canonical_observation_digest(observation), None, None)
 
     @classmethod
@@ -56,6 +59,7 @@ class FitEvidence:
         collector: str,
         clock: Callable[[], datetime],
     ) -> FitEvidence:
+        """Build attested evidence bound to the observation digest."""
         return cls(
             "observed",
             canonical_observation_digest(observation),
@@ -64,4 +68,5 @@ class FitEvidence:
         )
 
     def covers(self, observation: HardwareObservation) -> bool:
+        """Report whether this evidence is bound to the given observation."""
         return self.observation_digest == canonical_observation_digest(observation)

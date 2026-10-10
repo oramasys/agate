@@ -21,6 +21,7 @@ from .profiles import HardwareObservation, _matches, load_profile_store
 
 @dataclass(frozen=True, slots=True)
 class FitDecision:
+    """Measured fit verdict with a reason and an overridable flag."""
     feasible: bool
     reason_code: str
     model: str
@@ -38,6 +39,7 @@ def assess_fit(
     evidence: FitEvidence,
     profile_database: Path | str | None = None,
 ) -> FitDecision:
+    """Assess a model against measured hardware evidence; refuse when evidence is missing."""
     if not evidence.covers(observation):
         raise ValueError("fit evidence does not cover the assessed hardware observation")
     # Load first so a broken or unsupported database raises to the caller instead of
