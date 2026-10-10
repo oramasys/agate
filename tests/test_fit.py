@@ -77,10 +77,14 @@ def test_missing_evidence_refuses_rather_than_defaulting(policy):
 def test_ambiguous_evidence_refuses(policy, monkeypatch):
     import agate.fit as fit
 
-    def ambiguous(_obs, _path=None):
-        raise ValueError("hardware observation matches multiple profiles")
-
-    monkeypatch.setattr(fit, "identify_profile", ambiguous)
+    monkeypatch.setattr(fit, "_matches", lambda _profile, _obs: True)  # every profile matches
     decision = assess_fit(policy, "any", HardwareObservation(os="macOS"))
     assert not decision.feasible
     assert decision.reason_code == "profile_ambiguous"
+
+
+def test_broken_profile_database_is_an_error_not_ambiguity(policy, tmp_path):
+    bad = tmp_path / "profiles.json"
+    bad.write_text('{"version": 999, "profiles": []}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        assess_fit(policy, "any", HardwareObservation(os="macOS"), bad)
