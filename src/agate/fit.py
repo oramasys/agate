@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .evidence import FitEvidence
 from .policy import PolicyStore, Verdict
 from .profiles import HardwareObservation, _matches, load_profile_store
 
@@ -25,28 +26,42 @@ class FitDecision:
     model: str
     profile_id: str | None
     verdict: Verdict | None
+    # Placement evidence never confers an authorization capability or claim.
+    evidence_class: Literal["observed", "derived"]
     overridable: bool = False
-    # A fit built from a declared profile id is not measured evidence; this module
-    # only ever answers from an observation.
-    evidence_class: Literal["observed"] = "observed"
 
 
 def assess_fit(
     policy: PolicyStore,
     model: str,
     observation: HardwareObservation,
+    evidence: FitEvidence,
     profile_database: Path | str | None = None,
 ) -> FitDecision:
+    if not evidence.covers(observation):
+        raise ValueError("fit evidence does not cover the assessed hardware observation")
     # Load first so a broken or unsupported database raises to the caller instead of
     # being mistaken for ambiguous hardware evidence.
     store = load_profile_store(profile_database)
     matches = [p for p in store.profiles.values() if _matches(p, observation)]
     if len(matches) > 1:
-        return FitDecision(False, "profile_ambiguous", model, None, None)
+        return FitDecision(
+            False, "profile_ambiguous", model, None, None,
+            evidence_class=evidence.classification,
+        )
     if not matches:
-        return FitDecision(False, "profile_unidentified", model, None, None)
+        return FitDecision(
+            False, "profile_unidentified", model, None, None,
+            evidence_class=evidence.classification,
+        )
     profile = matches[0]
     verdict = policy.verdict(model, profile)
     if verdict == "NEVER":
-        return FitDecision(False, "model_forbidden_on_profile", model, profile.profile_id, verdict)
-    return FitDecision(True, f"fit_{verdict.lower()}", model, profile.profile_id, verdict)
+        return FitDecision(
+            False, "model_forbidden_on_profile", model, profile.profile_id, verdict,
+            evidence_class=evidence.classification,
+        )
+    return FitDecision(
+        True, f"fit_{verdict.lower()}", model, profile.profile_id, verdict,
+        evidence_class=evidence.classification,
+    )

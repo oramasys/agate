@@ -2,9 +2,13 @@
 non-overridable, and missing or ambiguous evidence refuses rather than allows."""
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime, timezone
+
 import pytest
 
 from agate import HardwareObservation, load_policy, load_profile_store
+from agate.evidence import FitEvidence
 from agate.fit import FitDecision, assess_fit
 
 
@@ -43,17 +47,23 @@ def profiles_with(policy, wanted: set[str]):
 
 def test_measured_fit_allows_a_permitted_model(policy):
     profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
-    decision = assess_fit(policy, model, observation_for(profile_id))
+    observation = observation_for(profile_id)
+    decision = assess_fit(
+        policy, model, observation, evidence=FitEvidence.derived(observation)
+    )
     assert isinstance(decision, FitDecision)
     assert decision.feasible
     assert decision.profile_id == profile_id
-    assert decision.evidence_class == "observed"
+    assert decision.evidence_class == "derived"
     assert decision.reason_code in {"fit_prefer", "fit_allow"}
 
 
 def test_forbidden_model_is_infeasible_and_not_overridable(policy):
     profile_id, model = profiles_with(policy, {"NEVER"})
-    decision = assess_fit(policy, model, observation_for(profile_id))
+    observation = observation_for(profile_id)
+    decision = assess_fit(
+        policy, model, observation, evidence=FitEvidence.derived(observation)
+    )
     assert not decision.feasible
     assert not decision.overridable
     assert decision.reason_code == "model_forbidden_on_profile"
@@ -61,13 +71,19 @@ def test_forbidden_model_is_infeasible_and_not_overridable(policy):
 
 def test_unknown_model_is_infeasible(policy):
     profile_id = next(iter(load_profile_store().profiles))
-    decision = assess_fit(policy, "no-such-model", observation_for(profile_id))
+    observation = observation_for(profile_id)
+    decision = assess_fit(
+        policy, "no-such-model", observation, evidence=FitEvidence.derived(observation)
+    )
     assert not decision.feasible
     assert not decision.overridable
 
 
 def test_missing_evidence_refuses_rather_than_defaulting(policy):
-    decision = assess_fit(policy, "any", HardwareObservation())
+    observation = HardwareObservation()
+    decision = assess_fit(
+        policy, "any", observation, evidence=FitEvidence.derived(observation)
+    )
     assert not decision.feasible
     assert decision.reason_code == "profile_unidentified"
     assert decision.profile_id is None
@@ -78,7 +94,10 @@ def test_ambiguous_evidence_refuses(policy, monkeypatch):
     import agate.fit as fit
 
     monkeypatch.setattr(fit, "_matches", lambda _profile, _obs: True)  # every profile matches
-    decision = assess_fit(policy, "any", HardwareObservation(os="macOS"))
+    observation = HardwareObservation(os="macOS")
+    decision = assess_fit(
+        policy, "any", observation, evidence=FitEvidence.derived(observation)
+    )
     assert not decision.feasible
     assert decision.reason_code == "profile_ambiguous"
 
@@ -86,5 +105,41 @@ def test_ambiguous_evidence_refuses(policy, monkeypatch):
 def test_broken_profile_database_is_an_error_not_ambiguity(policy, tmp_path):
     bad = tmp_path / "profiles.json"
     bad.write_text('{"version": 999, "profiles": []}', encoding="utf-8")
+    observation = HardwareObservation(os="macOS")
     with pytest.raises(ValueError):
-        assess_fit(policy, "any", HardwareObservation(os="macOS"), bad)
+        assess_fit(
+            policy,
+            "any",
+            observation,
+            evidence=FitEvidence.derived(observation),
+            profile_database=bad,
+        )
+
+
+def test_unattested_hardware_observation_is_derived_not_observed(policy):
+    profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
+    observation = observation_for(profile_id)
+    decision = assess_fit(
+        policy, model, observation, evidence=FitEvidence.derived(observation)
+    )
+    assert decision.evidence_class == "derived"
+
+
+def test_collector_evidence_binds_the_observation_digest():
+    observation = observation_for(next(iter(load_profile_store().profiles)))
+    clock = lambda: datetime(2026, 10, 11, tzinfo=timezone.utc)
+    evidence = FitEvidence.observed(
+        observation, collector="local-hardware-collector", clock=clock
+    )
+    changed = replace(observation, ram_gb=observation.ram_gb + 1)
+    assert not evidence.covers(changed)
+
+
+def test_fit_decision_has_no_capability_or_claim_operation(policy):
+    profile_id, model = profiles_with(policy, {"PREFER", "ALLOW"})
+    observation = observation_for(profile_id)
+    decision = assess_fit(
+        policy, model, observation, evidence=FitEvidence.derived(observation)
+    )
+    assert not hasattr(decision, "capability")
+    assert not hasattr(decision, "principal")
