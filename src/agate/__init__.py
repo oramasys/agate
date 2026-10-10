@@ -9,6 +9,7 @@ PROFILE_UNDERUSE reason code (exact shape is an open decision for the repo
 owner) and machine-level concurrency-safety enforcement remain deferred -- see
 docs/mhs-local-metal-convergence.md and the synthesized migration plan.
 """
+from .fit import FitDecision, assess_fit
 from .policy import (
     HardwareAffinityError,
     ModelSpec,
@@ -36,6 +37,7 @@ __all__ = [
     "PROFILES",
     "WIN_RTX3080",
     "WIN_RTX5080",
+    "FitDecision",
     "HardwareAffinityError",
     "HardwareObservation",
     "HardwareProfile",
@@ -43,6 +45,7 @@ __all__ = [
     "PolicyStore",
     "ProfileStore",
     "Verdict",
+    "assess_fit",
     "get_profile",
     "identify_profile",
     "load_policy",
