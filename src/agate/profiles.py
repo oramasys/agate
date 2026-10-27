@@ -359,6 +359,53 @@ def identify_profile(observation: HardwareObservation, path: Path | str | None =
     return matches[0] if matches else None
 
 
+_MACOS_PROFILER_TIMEOUT_SECONDS = 30
+
+
+def _observe_macos_display(ram_gb: int | None) -> tuple[str | None, str | None, int | None]:
+    """Return ``(cpu, accelerator, accelerator_memory_gb)`` from ``system_profiler``.
+
+    Any failure or timeout yields all ``None`` rather than a half-observed CPU
+    from ``platform``. Unified memory (``accelerator_memory_gb = ram_gb``) is
+    mapped only for an Apple chip with an Apple GPU model and no
+    ``spdisplays_vram`` key; otherwise the reported ``spdisplays_vram`` is parsed.
+    """
+    try:
+        result = subprocess.run(
+            ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
+            check=True, capture_output=True, text=True,
+            timeout=_MACOS_PROFILER_TIMEOUT_SECONDS,
+        )
+        data = json.loads(result.stdout)
+        hardware = data.get("SPHardwareDataType", [{}])[0]
+        displays = data.get("SPDisplaysDataType", [{}])
+        chip = hardware.get("chip_type")
+        cpu = chip or hardware.get("cpu_type")
+        display = displays[0] if displays else {}
+        accelerator = display.get("sppci_model")
+        memory = display.get("spdisplays_vram")
+        accelerator_memory_gb: int | None = None
+        if isinstance(memory, str):
+            digits = "".join(char for char in memory if char.isdigit())
+            accelerator_memory_gb = int(digits) if digits else None
+        elif (
+            "spdisplays_vram" not in display
+            and isinstance(chip, str) and chip.startswith("Apple")
+            and isinstance(accelerator, str) and accelerator.startswith("Apple")
+        ):
+            accelerator_memory_gb = _observed_positive_integer(ram_gb)
+        return (
+            cpu if _is_valid_text(cpu) else None,
+            accelerator if _is_valid_text(accelerator) else None,
+            accelerator_memory_gb,
+        )
+    except (
+        OSError, subprocess.SubprocessError, ValueError, KeyError,
+        IndexError, AttributeError, TypeError,
+    ):
+        return None, None, None
+
+
 def observe_local_hardware() -> HardwareObservation:
     """Collect best-effort local facts without network or provider I/O.
 
@@ -379,22 +426,7 @@ def observe_local_hardware() -> HardwareObservation:
     accelerator_memory_gb: int | None = None
 
     if system == "Darwin":
-        try:
-            result = subprocess.run(
-                ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
-                check=True, capture_output=True, text=True, timeout=10,
-            )
-            data = json.loads(result.stdout)
-            hardware = data.get("SPHardwareDataType", [{}])[0]
-            displays = data.get("SPDisplaysDataType", [{}])
-            cpu = hardware.get("chip_type") or hardware.get("cpu_type") or cpu
-            accelerator = displays[0].get("sppci_model") if displays else None
-            memory = displays[0].get("spdisplays_vram") if displays else None
-            if isinstance(memory, str):
-                digits = "".join(char for char in memory if char.isdigit())
-                accelerator_memory_gb = int(digits) if digits else None
-        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError, KeyError):
-            pass
+        cpu, accelerator, accelerator_memory_gb = _observe_macos_display(ram_gb)
 
     return HardwareObservation(os_name, cpu, ram_gb, accelerator, accelerator_memory_gb)
 

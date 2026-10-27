@@ -269,3 +269,93 @@ def test_windows_command_tolerates_protected_registry_subkeys_and_requires_agree
     assert "Get-ChildItem -LiteralPath $class -ErrorAction SilentlyContinue" in command
     assert "-ErrorAction Stop" not in command
     assert "Sort-Object -Unique" in command and "$distinct.Count -eq 1" in command
+
+
+def _mac_host(
+    monkeypatch: pytest.MonkeyPatch,
+    profiler: dict[str, object] | BaseException,
+    ram_gb: int | None = 16,
+) -> list[dict[str, object]]:
+    """Mock a macOS host; returns the kwargs of each ``system_profiler`` call."""
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(kwargs)
+        if isinstance(profiler, BaseException):
+            raise profiler
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(profiler))
+
+    monkeypatch.setattr(profiles.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(profiles.platform, "processor", lambda: "arm")
+    monkeypatch.setattr(profiles.subprocess, "run", fake_run)
+    if ram_gb is None:
+        def no_sysconf(_name: str) -> int:
+            raise ValueError("unavailable")
+
+        monkeypatch.setattr(profiles.os, "sysconf", no_sysconf, raising=False)
+    else:
+        monkeypatch.setattr(
+            profiles.os, "sysconf",
+            lambda name: 4096 if name == "SC_PAGE_SIZE" else ram_gb * 2**30 // 4096,
+            raising=False,
+        )
+    return calls
+
+
+def _apple_silicon(**display: object) -> dict[str, object]:
+    return {
+        "SPHardwareDataType": [{"chip_type": "Apple M2 Pro"}],
+        "SPDisplaysDataType": [{"sppci_model": "Apple M2 Pro", **display}],
+    }
+
+
+def test_apple_silicon_unified_memory_identifies_mac_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mac_host(monkeypatch, _apple_silicon(sppci_bus="spdisplays_builtin"))
+    observation = profiles.observe_local_hardware()
+    assert calls[0]["timeout"] == 30
+    assert (observation.os, observation.ram_gb) == ("macOS", 16)
+    assert observation.accelerator_memory_gb == 16
+    profile = profiles.identify_profile(observation)
+    assert profile is not None and profile.profile_id == "mac-studio"
+
+
+def test_apple_silicon_without_builtin_bus_still_maps(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, _apple_silicon())
+    assert profiles.observe_local_hardware().accelerator_memory_gb == 16
+
+
+def test_intel_mac_keeps_spdisplays_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, {
+        "SPHardwareDataType": [{"cpu_type": "Intel Core i9"}],
+        "SPDisplaysDataType": [{"sppci_model": "AMD Radeon Pro", "spdisplays_vram": "8 GB"}],
+    })
+    assert profiles.observe_local_hardware().accelerator_memory_gb == 8
+
+
+def test_apple_chip_with_non_apple_gpu_gets_no_unified_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = _apple_silicon()
+    data["SPDisplaysDataType"] = [{"sppci_model": "AMD Radeon RX"}]
+    _mac_host(monkeypatch, data)
+    assert profiles.observe_local_hardware().accelerator_memory_gb is None
+
+
+def test_unknown_ram_leaves_unified_memory_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, _apple_silicon(), ram_gb=None)
+    observation = profiles.observe_local_hardware()
+    assert observation.accelerator_memory_gb is None
+    assert profiles.identify_profile(observation) is None
+
+
+def test_system_profiler_timeout_reports_nothing_half_observed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mac_host(monkeypatch, subprocess.TimeoutExpired("system_profiler", 30))
+    observation = profiles.observe_local_hardware()
+    assert calls[0]["timeout"] == 30
+    assert observation.cpu is None and observation.accelerator is None
+    assert observation.accelerator_memory_gb is None
+    assert profiles.identify_profile(observation) is None
