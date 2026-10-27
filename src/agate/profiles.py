@@ -8,6 +8,7 @@ matched against the database but never rewrites operator policy or profile data.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import platform
 import subprocess
@@ -74,13 +75,12 @@ _WINDOWS_HARDWARE_COMMAND = (
     "if ($null -ne $value) { $qw = [uint64]$value; break } } } } catch { $qw = $null }; "
     "[PSCustomObject]@{cpu=$cpu;ram_gb=[math]::Round($system.TotalPhysicalMemory "
     "/ 1GB);os_caption=$caption;accelerator=$gpu.Name;"
-    "registry_vram_bytes=$qw;adapter_ram_bytes=$gpu.AdapterRAM} "
+    "registry_vram_bytes=$qw} "
     "| ConvertTo-Json -Compress"
 )
-_ADAPTER_RAM_CAP_BYTES = 2**32 - 2**20
-_NVIDIA_SMI_COMMAND = [
-    "nvidia-smi",
-    "--query-gpu=memory.total",
+_MAX_PLAUSIBLE_VRAM_GB = 1024
+_NVIDIA_SMI_ARGS = [
+    "--query-gpu=name,memory.total",
     "--format=csv,noheader,nounits",
 ]
 
@@ -129,55 +129,88 @@ def _normalise_windows_caption(caption: object) -> str:
 
 
 def _bytes_to_gb(value: object) -> int | None:
-    """Convert a positive byte count to whole GiB using ``round(bytes / 1GiB)``."""
+    """Convert a byte count to whole GiB; implausible (<=0 or >1024 GB) is ``None``."""
     count = _observed_positive_integer(value)
-    if count is None:
+    if count is None or count > _MAX_PLAUSIBLE_VRAM_GB * 2**30:
         return None
     return _observed_positive_integer(round(count / 2**30))
 
 
-def _nvidia_smi_memory_gb() -> int | None:
-    """Read the first GPU's total memory (MiB) from ``nvidia-smi`` as whole GiB."""
+def _windows_system_root() -> str:
+    """Return ``%SystemRoot%`` from the environment, defaulting to ``C:/Windows``."""
+    return os.environ.get("SystemRoot") or "C:\\Windows"
+
+
+def _powershell_path() -> str:
+    """Return the absolute Windows PowerShell path; PATH and cwd are never searched."""
+    return ntpath.join(
+        _windows_system_root(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+
+
+def _nvidia_smi_path() -> str | None:
+    """Return an existing absolute ``nvidia-smi.exe`` path, or ``None`` to skip it."""
+    program_files = os.environ.get("ProgramFiles") or "C:\\Program Files"
+    candidates = (
+        ntpath.join(_windows_system_root(), "System32", "nvidia-smi.exe"),
+        ntpath.join(program_files, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _nvidia_smi_memory_gb(accelerator: str) -> int | None:
+    """Return GiB for the one ``nvidia-smi`` row whose name equals ``accelerator``.
+
+    Zero or several matching rows (or any failure) yield ``None`` so the caller
+    falls through to the registry value instead of guessing across devices.
+    """
+    executable = _nvidia_smi_path()
+    if executable is None:
+        return None
     try:
         result = subprocess.run(
-            _NVIDIA_SMI_COMMAND,
-            check=True, capture_output=True, text=True, timeout=10,
+            [executable, *_NVIDIA_SMI_ARGS],
+            check=True, capture_output=True, text=True, encoding="utf-8", timeout=10,
         )
-        first = result.stdout.strip().splitlines()[0].strip()
-        mib = int(first)
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        wanted = accelerator.strip().casefold()
+        rows = []
+        for line in result.stdout.splitlines():
+            name, separator, memory = line.rpartition(",")
+            if separator and name.strip().casefold() == wanted:
+                rows.append(int(memory.strip()))
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    return _bytes_to_gb(mib * 2**20) if mib >= 1 else None
+    return _bytes_to_gb(rows[0] * 2**20) if len(rows) == 1 else None
 
 
 def _windows_accelerator_memory_gb(
     accelerator: str | None, data: dict[str, Any]
 ) -> int | None:
-    """Pick VRAM from a 64-bit source; never trust a capped 32-bit AdapterRAM."""
+    """Pick VRAM from a 64-bit source: matching ``nvidia-smi`` row, then registry.
+
+    The 32-bit ``AdapterRAM`` is never used because it saturates or wraps.
+    """
     if accelerator is not None and "nvidia" in accelerator.casefold():
-        memory = _nvidia_smi_memory_gb()
+        memory = _nvidia_smi_memory_gb(accelerator)
         if memory is not None:
             return memory
-    memory = _bytes_to_gb(data.get("registry_vram_bytes"))
-    if memory is not None:
-        return memory
-    adapter = _observed_positive_integer(data.get("adapter_ram_bytes"))
-    if adapter is not None and adapter < _ADAPTER_RAM_CAP_BYTES:
-        return _bytes_to_gb(adapter)
-    return None
+    return _bytes_to_gb(data.get("registry_vram_bytes"))
 
 
 def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
     """Collect local Windows hardware facts through CIM without network I/O.
 
     The OS edition comes from ``Win32_OperatingSystem.Caption``; VRAM prefers
-    ``nvidia-smi``, then the 64-bit registry value, then an uncapped
-    ``AdapterRAM``, else ``None`` so the profile match fails closed.
+    ``nvidia-smi`` (single matching row), then the 64-bit registry value, else
+    ``None`` so the profile match fails closed.
     """
     try:
         result = subprocess.run(
             [
-                "powershell",
+                _powershell_path(),
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
