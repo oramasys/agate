@@ -59,11 +59,30 @@ _WINDOWS_HARDWARE_COMMAND = (
     "$cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 "
     "-ExpandProperty Name); "
     "$system = Get-CimInstance Win32_ComputerSystem; "
+    "$caption = (Get-CimInstance Win32_OperatingSystem | Select-Object -First 1 "
+    "-ExpandProperty Caption); "
     "$gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1; "
+    "$qw = $null; "
+    "try { "
+    "$class = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
+    "{4d36e968-e325-11ce-bfc1-08002be10318}'; "
+    "foreach ($key in Get-ChildItem -LiteralPath $class -ErrorAction Stop) { "
+    "$props = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue; "
+    "if ($props -and $props.DriverDesc -eq $gpu.Name) { "
+    "$value = $props.'HardwareInformation.qwMemorySize'; "
+    "if ($value -is [byte[]]) { $value = [BitConverter]::ToUInt64($value, 0) }; "
+    "if ($null -ne $value) { $qw = [uint64]$value; break } } } } catch { $qw = $null }; "
     "[PSCustomObject]@{cpu=$cpu;ram_gb=[math]::Round($system.TotalPhysicalMemory "
-    "/ 1GB);accelerator=$gpu.Name;accelerator_memory_gb=[math]::Round($gpu.AdapterRAM "
-    "/ 1GB)} | ConvertTo-Json -Compress"
+    "/ 1GB);os_caption=$caption;accelerator=$gpu.Name;"
+    "registry_vram_bytes=$qw;adapter_ram_bytes=$gpu.AdapterRAM} "
+    "| ConvertTo-Json -Compress"
 )
+_ADAPTER_RAM_CAP_BYTES = 2**32 - 2**20
+_NVIDIA_SMI_COMMAND = [
+    "nvidia-smi",
+    "--query-gpu=memory.total",
+    "--format=csv,noheader,nounits",
+]
 
 
 def _read_database(path: Path | str | None) -> Any:
@@ -99,8 +118,62 @@ def _observed_positive_integer(value: object) -> int | None:
     return None
 
 
+def _normalise_windows_caption(caption: object) -> str:
+    """Return the Windows edition name, or plain ``Windows`` when unavailable."""
+    if not _is_valid_text(caption):
+        return "Windows"
+    text = str(caption).strip()
+    if text.startswith("Microsoft "):
+        text = text[len("Microsoft "):].strip()
+    return text or "Windows"
+
+
+def _bytes_to_gb(value: object) -> int | None:
+    """Convert a positive byte count to whole GiB using ``round(bytes / 1GiB)``."""
+    count = _observed_positive_integer(value)
+    if count is None:
+        return None
+    return _observed_positive_integer(round(count / 2**30))
+
+
+def _nvidia_smi_memory_gb() -> int | None:
+    """Read the first GPU's total memory (MiB) from ``nvidia-smi`` as whole GiB."""
+    try:
+        result = subprocess.run(
+            _NVIDIA_SMI_COMMAND,
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        first = result.stdout.strip().splitlines()[0].strip()
+        mib = int(first)
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    return _bytes_to_gb(mib * 2**20) if mib >= 1 else None
+
+
+def _windows_accelerator_memory_gb(
+    accelerator: str | None, data: dict[str, Any]
+) -> int | None:
+    """Pick VRAM from a 64-bit source; never trust a capped 32-bit AdapterRAM."""
+    if accelerator is not None and "nvidia" in accelerator.casefold():
+        memory = _nvidia_smi_memory_gb()
+        if memory is not None:
+            return memory
+    memory = _bytes_to_gb(data.get("registry_vram_bytes"))
+    if memory is not None:
+        return memory
+    adapter = _observed_positive_integer(data.get("adapter_ram_bytes"))
+    if adapter is not None and adapter < _ADAPTER_RAM_CAP_BYTES:
+        return _bytes_to_gb(adapter)
+    return None
+
+
 def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
-    """Collect local Windows hardware facts through CIM without network I/O."""
+    """Collect local Windows hardware facts through CIM without network I/O.
+
+    The OS edition comes from ``Win32_OperatingSystem.Caption``; VRAM prefers
+    ``nvidia-smi``, then the 64-bit registry value, then an uncapped
+    ``AdapterRAM``, else ``None`` so the profile match fails closed.
+    """
     try:
         result = subprocess.run(
             [
@@ -130,14 +203,13 @@ def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
 
     cpu = data.get("cpu")
     accelerator = data.get("accelerator")
+    accelerator = accelerator if _is_valid_text(accelerator) else None
     return HardwareObservation(
-        os="Windows",
+        os=_normalise_windows_caption(data.get("os_caption")),
         cpu=cpu if _is_valid_text(cpu) else fallback_cpu,
         ram_gb=_observed_positive_integer(data.get("ram_gb")),
-        accelerator=accelerator if _is_valid_text(accelerator) else None,
-        accelerator_memory_gb=_observed_positive_integer(
-            data.get("accelerator_memory_gb")
-        ),
+        accelerator=accelerator,
+        accelerator_memory_gb=_windows_accelerator_memory_gb(accelerator, data),
     )
 
 
