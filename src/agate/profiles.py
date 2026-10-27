@@ -63,16 +63,18 @@ _WINDOWS_HARDWARE_COMMAND = (
     "$caption = (Get-CimInstance Win32_OperatingSystem | Select-Object -First 1 "
     "-ExpandProperty Caption); "
     "$gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1; "
-    "$qw = $null; "
+    "$qw = $null; $vals = @(); "
     "try { "
     "$class = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
     "{4d36e968-e325-11ce-bfc1-08002be10318}'; "
-    "foreach ($key in Get-ChildItem -LiteralPath $class -ErrorAction Stop) { "
+    "foreach ($key in Get-ChildItem -LiteralPath $class -ErrorAction SilentlyContinue) { "
     "$props = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue; "
     "if ($props -and $props.DriverDesc -eq $gpu.Name) { "
     "$value = $props.'HardwareInformation.qwMemorySize'; "
     "if ($value -is [byte[]]) { $value = [BitConverter]::ToUInt64($value, 0) }; "
-    "if ($null -ne $value) { $qw = [uint64]$value; break } } } } catch { $qw = $null }; "
+    "if ($null -ne $value) { $vals += [uint64]$value } } }; "
+    "$distinct = @($vals | Sort-Object -Unique); "
+    "if ($distinct.Count -eq 1) { $qw = $distinct[0] } } catch { $qw = $null }; "
     "[PSCustomObject]@{cpu=$cpu;ram_gb=[math]::Round($system.TotalPhysicalMemory "
     "/ 1GB);os_caption=$caption;accelerator=$gpu.Name;"
     "registry_vram_bytes=$qw} "
@@ -190,6 +192,9 @@ def _windows_accelerator_memory_gb(
     accelerator: str | None, data: dict[str, Any]
 ) -> int | None:
     """Pick VRAM from a 64-bit source: matching ``nvidia-smi`` row, then registry.
+
+    The registry value is used only when every adapter entry with the observed name agrees,
+    so two same-name cards of different sizes leave VRAM unknown instead of borrowing.
 
     The 32-bit ``AdapterRAM`` is never used because it saturates or wraps.
     """

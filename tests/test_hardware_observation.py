@@ -253,3 +253,19 @@ def test_unknown_vram_keeps_profile_unidentified(monkeypatch: pytest.MonkeyPatch
     observation = profiles.observe_local_hardware()
     assert observation.os == "Windows 11 Pro"
     assert profiles.identify_profile(observation) is None
+
+
+def test_windows_command_tolerates_protected_registry_subkeys_and_requires_agreement() -> None:
+    """The registry scan must not abort on a protected subkey and must need one agreed value.
+
+    On a real Windows 11 host, enumerating the display-adapter class key with
+    ``-ErrorAction Stop`` throws ``SecurityException`` on a protected subkey, which made the
+    registry fallback always return null. Same-name adapters reporting different sizes must
+    leave VRAM unknown rather than borrowing another card's capacity.
+    """
+    from agate import profiles
+
+    command = profiles._WINDOWS_HARDWARE_COMMAND
+    assert "Get-ChildItem -LiteralPath $class -ErrorAction SilentlyContinue" in command
+    assert "-ErrorAction Stop" not in command
+    assert "Sort-Object -Unique" in command and "$distinct.Count -eq 1" in command
