@@ -8,8 +8,10 @@ matched against the database but never rewrites operator policy or profile data.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import platform
+import re
 import subprocess
 from dataclasses import dataclass, field
 from importlib import resources
@@ -46,6 +48,7 @@ class HardwareObservation:
 
 @dataclass(frozen=True, slots=True)
 class ProfileStore:
+    """The versioned set of hardware profiles loaded from the database."""
     version: int
     profiles: dict[str, HardwareProfile]
 
@@ -59,14 +62,35 @@ _WINDOWS_HARDWARE_COMMAND = (
     "$cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 "
     "-ExpandProperty Name); "
     "$system = Get-CimInstance Win32_ComputerSystem; "
+    "$caption = (Get-CimInstance Win32_OperatingSystem | Select-Object -First 1 "
+    "-ExpandProperty Caption); "
     "$gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1; "
+    "$qw = $null; $vals = @(); "
+    "try { "
+    "$class = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
+    "{4d36e968-e325-11ce-bfc1-08002be10318}'; "
+    "foreach ($key in Get-ChildItem -LiteralPath $class -ErrorAction SilentlyContinue) { "
+    "$props = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue; "
+    "if ($props -and $props.DriverDesc -eq $gpu.Name) { "
+    "$value = $props.'HardwareInformation.qwMemorySize'; "
+    "if ($value -is [byte[]]) { $value = [BitConverter]::ToUInt64($value, 0) }; "
+    "if ($null -ne $value) { $vals += [uint64]$value } } }; "
+    "$distinct = @($vals | Sort-Object -Unique); "
+    "if ($distinct.Count -eq 1) { $qw = $distinct[0] } } catch { $qw = $null }; "
     "[PSCustomObject]@{cpu=$cpu;ram_gb=[math]::Round($system.TotalPhysicalMemory "
-    "/ 1GB);accelerator=$gpu.Name;accelerator_memory_gb=[math]::Round($gpu.AdapterRAM "
-    "/ 1GB)} | ConvertTo-Json -Compress"
+    "/ 1GB);os_caption=$caption;accelerator=$gpu.Name;"
+    "registry_vram_bytes=$qw} "
+    "| ConvertTo-Json -Compress"
 )
+_MAX_PLAUSIBLE_VRAM_GB = 1024
+_NVIDIA_SMI_ARGS = [
+    "--query-gpu=name,memory.total",
+    "--format=csv,noheader,nounits",
+]
 
 
 def _read_database(path: Path | str | None) -> Any:
+    """Read the profile JSON from an explicit path, the env override, or the bundled resource."""
     if path is not None:
         with Path(path).open(encoding="utf-8") as handle:
             return json.load(handle)
@@ -81,10 +105,12 @@ def _read_database(path: Path | str | None) -> Any:
 
 
 def _is_valid_memory_gb(value: Any) -> bool:
+    """True for a non-bool integer of at least 1 GiB."""
     return not isinstance(value, bool) and isinstance(value, int) and value >= 1
 
 
 def _is_valid_text(value: Any) -> bool:
+    """True for a string with non-whitespace content."""
     return isinstance(value, str) and bool(value.strip())
 
 
@@ -99,12 +125,102 @@ def _observed_positive_integer(value: object) -> int | None:
     return None
 
 
+def _normalise_windows_caption(caption: object) -> str:
+    """Return the Windows edition name, or plain ``Windows`` when unavailable."""
+    if not _is_valid_text(caption):
+        return "Windows"
+    text = str(caption).strip()
+    if text.startswith("Microsoft "):
+        text = text[len("Microsoft "):].strip()
+    return text or "Windows"
+
+
+def _bytes_to_gb(value: object) -> int | None:
+    """Convert a byte count to whole GiB; implausible (<=0 or >1024 GB) is ``None``."""
+    count = _observed_positive_integer(value)
+    if count is None or count > _MAX_PLAUSIBLE_VRAM_GB * 2**30:
+        return None
+    return _observed_positive_integer(round(count / 2**30))
+
+
+def _windows_system_root() -> str:
+    """Return ``%SystemRoot%`` from the environment, defaulting to ``C:/Windows``."""
+    return os.environ.get("SystemRoot") or "C:\\Windows"
+
+
+def _powershell_path() -> str:
+    """Return the absolute Windows PowerShell path; PATH and cwd are never searched."""
+    return ntpath.join(
+        _windows_system_root(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+
+
+def _nvidia_smi_path() -> str | None:
+    """Return an existing absolute ``nvidia-smi.exe`` path, or ``None`` to skip it."""
+    program_files = os.environ.get("ProgramFiles") or "C:\\Program Files"
+    candidates = (
+        ntpath.join(_windows_system_root(), "System32", "nvidia-smi.exe"),
+        ntpath.join(program_files, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _nvidia_smi_memory_gb(accelerator: str) -> int | None:
+    """Return GiB for the one ``nvidia-smi`` row whose name equals ``accelerator``.
+
+    Zero or several matching rows (or any failure) yield ``None`` so the caller
+    falls through to the registry value instead of guessing across devices.
+    """
+    executable = _nvidia_smi_path()
+    if executable is None:
+        return None
+    try:
+        result = subprocess.run(
+            [executable, *_NVIDIA_SMI_ARGS],
+            check=True, capture_output=True, text=True, encoding="utf-8", timeout=10,
+        )
+        wanted = accelerator.strip().casefold()
+        rows = []
+        for line in result.stdout.splitlines():
+            name, separator, memory = line.rpartition(",")
+            if separator and name.strip().casefold() == wanted:
+                rows.append(int(memory.strip()))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return _bytes_to_gb(rows[0] * 2**20) if len(rows) == 1 else None
+
+
+def _windows_accelerator_memory_gb(
+    accelerator: str | None, data: dict[str, Any]
+) -> int | None:
+    """Pick VRAM from a 64-bit source: matching ``nvidia-smi`` row, then registry.
+
+    The registry value is used only when every adapter entry with the observed name agrees,
+    so two same-name cards of different sizes leave VRAM unknown instead of borrowing.
+
+    The 32-bit ``AdapterRAM`` is never used because it saturates or wraps.
+    """
+    if accelerator is not None and "nvidia" in accelerator.casefold():
+        memory = _nvidia_smi_memory_gb(accelerator)
+        if memory is not None:
+            return memory
+    return _bytes_to_gb(data.get("registry_vram_bytes"))
+
+
 def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
-    """Collect local Windows hardware facts through CIM without network I/O."""
+    """Collect local Windows hardware facts through CIM without network I/O.
+
+    The OS edition comes from ``Win32_OperatingSystem.Caption``; VRAM prefers
+    ``nvidia-smi`` (single matching row), then the 64-bit registry value, else
+    ``None`` so the profile match fails closed.
+    """
     try:
         result = subprocess.run(
             [
-                "powershell",
+                _powershell_path(),
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
@@ -130,14 +246,13 @@ def _observe_windows_hardware(fallback_cpu: str | None) -> HardwareObservation:
 
     cpu = data.get("cpu")
     accelerator = data.get("accelerator")
+    accelerator = accelerator if _is_valid_text(accelerator) else None
     return HardwareObservation(
-        os="Windows",
+        os=_normalise_windows_caption(data.get("os_caption")),
         cpu=cpu if _is_valid_text(cpu) else fallback_cpu,
         ram_gb=_observed_positive_integer(data.get("ram_gb")),
-        accelerator=accelerator if _is_valid_text(accelerator) else None,
-        accelerator_memory_gb=_observed_positive_integer(
-            data.get("accelerator_memory_gb")
-        ),
+        accelerator=accelerator,
+        accelerator_memory_gb=_windows_accelerator_memory_gb(accelerator, data),
     )
 
 
@@ -145,6 +260,7 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
     # Keep in parity with schemas/hardware_profiles.schema.json (Draft 2020-12):
     # the schema is the contract, this loader is one enforcement of it, and
     # tests assert both accept and reject the same corpus.
+    """Validate one raw profile mapping and build a HardwareProfile."""
     if not isinstance(raw, dict):
         raise ValueError("hardware profile must be an object")
     required = {
@@ -213,6 +329,7 @@ def load_profile_store(path: Path | str | None = None) -> ProfileStore:
 
 
 def get_profile(profile_id: str, path: Path | str | None = None) -> HardwareProfile:
+    """Return the profile with this id, or raise KeyError listing known ids."""
     profiles = load_profile_store(path).profiles
     try:
         return profiles[profile_id]
@@ -223,10 +340,12 @@ def get_profile(profile_id: str, path: Path | str | None = None) -> HardwareProf
 
 
 def _contains(observed: str | None, expected: object) -> bool:
+    """Case-insensitive substring test that is False when nothing was observed."""
     return observed is not None and str(expected).casefold() in observed.casefold()
 
 
 def _matches(profile: HardwareProfile, observation: HardwareObservation) -> bool:
+    """True when the observation satisfies every constraint in the profile's match block."""
     match = profile.match
     if "os" in match and observation.os != match["os"]:
         return False
@@ -249,6 +368,71 @@ def identify_profile(observation: HardwareObservation, path: Path | str | None =
     return matches[0] if matches else None
 
 
+_MACOS_PROFILER_TIMEOUT_SECONDS = 30
+
+
+def _parse_macos_vram_gb(text: str) -> int | None:
+    """Parse ``spdisplays_vram`` ("1536 MB", "8 GB", "1 TB") into whole GB.
+
+    Unknown units or unparsable text give ``None``, as do values <= 0 or
+    > 1024 GB.
+    """
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(MB|GB|TB)\s*", text, re.IGNORECASE)
+    if match is None:
+        return None
+    factor = {"MB": 1 / 1024, "GB": 1, "TB": 1024}[match.group(2).upper()]
+    gigabytes = round(float(match.group(1)) * factor)
+    return gigabytes if 1 <= gigabytes <= _MAX_PLAUSIBLE_VRAM_GB else None
+
+
+def _observe_macos_display(ram_gb: int | None) -> tuple[str | None, str | None, int | None]:
+    """Return ``(cpu, accelerator, accelerator_memory_gb)`` from ``system_profiler``.
+
+    Any failure or timeout yields all ``None`` rather than a half-observed CPU
+    from ``platform``. The accelerator is the first display entry with an
+    ``sppci_model``. Unified memory (``accelerator_memory_gb = ram_gb``) is
+    mapped only for an Apple chip when every GPU entry is Apple and the chosen
+    one has no ``spdisplays_vram`` key; otherwise ``spdisplays_vram`` is parsed.
+    """
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
+            check=True, capture_output=True, text=True,
+            timeout=_MACOS_PROFILER_TIMEOUT_SECONDS,
+        )
+        data = json.loads(result.stdout)
+        hardware = data.get("SPHardwareDataType", [{}])[0]
+        displays = data.get("SPDisplaysDataType", [{}])
+        chip = hardware.get("chip_type")
+        cpu = chip or hardware.get("cpu_type")
+        gpus = [d for d in displays if isinstance(d, dict) and d.get("sppci_model")]
+        display = gpus[0] if gpus else {}
+        accelerator = display.get("sppci_model")
+        memory = display.get("spdisplays_vram")
+        accelerator_memory_gb: int | None = None
+        if isinstance(memory, str):
+            accelerator_memory_gb = _parse_macos_vram_gb(memory)
+        elif (
+            "spdisplays_vram" not in display
+            and isinstance(chip, str) and chip.startswith("Apple")
+            and all(
+                isinstance(g["sppci_model"], str) and g["sppci_model"].startswith("Apple")
+                for g in gpus
+            )
+        ):
+            accelerator_memory_gb = _observed_positive_integer(ram_gb)
+        return (
+            cpu if _is_valid_text(cpu) else None,
+            accelerator if _is_valid_text(accelerator) else None,
+            accelerator_memory_gb,
+        )
+    except (
+        OSError, subprocess.SubprocessError, ValueError, KeyError,
+        IndexError, AttributeError, TypeError,
+    ):
+        return None, None, None
+
+
 def observe_local_hardware() -> HardwareObservation:
     """Collect best-effort local facts without network or provider I/O.
 
@@ -269,22 +453,7 @@ def observe_local_hardware() -> HardwareObservation:
     accelerator_memory_gb: int | None = None
 
     if system == "Darwin":
-        try:
-            result = subprocess.run(
-                ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
-                check=True, capture_output=True, text=True, timeout=10,
-            )
-            data = json.loads(result.stdout)
-            hardware = data.get("SPHardwareDataType", [{}])[0]
-            displays = data.get("SPDisplaysDataType", [{}])
-            cpu = hardware.get("chip_type") or hardware.get("cpu_type") or cpu
-            accelerator = displays[0].get("sppci_model") if displays else None
-            memory = displays[0].get("spdisplays_vram") if displays else None
-            if isinstance(memory, str):
-                digits = "".join(char for char in memory if char.isdigit())
-                accelerator_memory_gb = int(digits) if digits else None
-        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError, KeyError):
-            pass
+        cpu, accelerator, accelerator_memory_gb = _observe_macos_display(ram_gb)
 
     return HardwareObservation(os_name, cpu, ram_gb, accelerator, accelerator_memory_gb)
 
