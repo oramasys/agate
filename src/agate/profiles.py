@@ -11,6 +11,7 @@ import json
 import ntpath
 import os
 import platform
+import re
 import subprocess
 from dataclasses import dataclass, field
 from importlib import resources
@@ -362,13 +363,28 @@ def identify_profile(observation: HardwareObservation, path: Path | str | None =
 _MACOS_PROFILER_TIMEOUT_SECONDS = 30
 
 
+def _parse_macos_vram_gb(text: str) -> int | None:
+    """Parse ``spdisplays_vram`` ("1536 MB", "8 GB", "1 TB") into whole GB.
+
+    Unknown units or unparsable text give ``None``, as do values <= 0 or
+    > 1024 GB.
+    """
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(MB|GB|TB)\s*", text, re.IGNORECASE)
+    if match is None:
+        return None
+    factor = {"MB": 1 / 1024, "GB": 1, "TB": 1024}[match.group(2).upper()]
+    gigabytes = round(float(match.group(1)) * factor)
+    return gigabytes if 1 <= gigabytes <= _MAX_PLAUSIBLE_VRAM_GB else None
+
+
 def _observe_macos_display(ram_gb: int | None) -> tuple[str | None, str | None, int | None]:
     """Return ``(cpu, accelerator, accelerator_memory_gb)`` from ``system_profiler``.
 
     Any failure or timeout yields all ``None`` rather than a half-observed CPU
-    from ``platform``. Unified memory (``accelerator_memory_gb = ram_gb``) is
-    mapped only for an Apple chip with an Apple GPU model and no
-    ``spdisplays_vram`` key; otherwise the reported ``spdisplays_vram`` is parsed.
+    from ``platform``. The accelerator is the first display entry with an
+    ``sppci_model``. Unified memory (``accelerator_memory_gb = ram_gb``) is
+    mapped only for an Apple chip when every GPU entry is Apple and the chosen
+    one has no ``spdisplays_vram`` key; otherwise ``spdisplays_vram`` is parsed.
     """
     try:
         result = subprocess.run(
@@ -381,17 +397,20 @@ def _observe_macos_display(ram_gb: int | None) -> tuple[str | None, str | None, 
         displays = data.get("SPDisplaysDataType", [{}])
         chip = hardware.get("chip_type")
         cpu = chip or hardware.get("cpu_type")
-        display = displays[0] if displays else {}
+        gpus = [d for d in displays if isinstance(d, dict) and d.get("sppci_model")]
+        display = gpus[0] if gpus else {}
         accelerator = display.get("sppci_model")
         memory = display.get("spdisplays_vram")
         accelerator_memory_gb: int | None = None
         if isinstance(memory, str):
-            digits = "".join(char for char in memory if char.isdigit())
-            accelerator_memory_gb = int(digits) if digits else None
+            accelerator_memory_gb = _parse_macos_vram_gb(memory)
         elif (
             "spdisplays_vram" not in display
             and isinstance(chip, str) and chip.startswith("Apple")
-            and isinstance(accelerator, str) and accelerator.startswith("Apple")
+            and all(
+                isinstance(g["sppci_model"], str) and g["sppci_model"].startswith("Apple")
+                for g in gpus
+            )
         ):
             accelerator_memory_gb = _observed_positive_integer(ram_gb)
         return (

@@ -359,3 +359,39 @@ def test_system_profiler_timeout_reports_nothing_half_observed(
     assert observation.cpu is None and observation.accelerator is None
     assert observation.accelerator_memory_gb is None
     assert profiles.identify_profile(observation) is None
+
+
+def _displays(*models: str) -> dict[str, object]:
+    return {
+        "SPHardwareDataType": [{"chip_type": "Apple M2 Pro"}],
+        "SPDisplaysDataType": [{"sppci_model": m} if m else {"_name": "x"} for m in models],
+    }
+
+
+def test_apple_gpu_with_egpu_gets_no_unified_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, _displays("Apple M2 Pro", "AMD Radeon RX"))
+    observation = profiles.observe_local_hardware()
+    assert observation.accelerator_memory_gb is None
+    assert profiles.identify_profile(observation) is None
+
+
+def test_egpu_first_then_apple_gets_no_unified_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, _displays("AMD Radeon RX", "Apple M2 Pro"))
+    assert profiles.observe_local_hardware().accelerator_memory_gb is None
+
+
+def test_entries_without_model_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mac_host(monkeypatch, _displays("", "Apple M2 Pro"))
+    observation = profiles.observe_local_hardware()
+    assert observation.accelerator == "Apple M2 Pro"
+    profile = profiles.identify_profile(observation)
+    assert profile is not None and profile.profile_id == "mac-studio"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("1536 MB", 2), ("8 GB", 8), ("1 TB", 1024), ("Dynamic, Max", None),
+     ("8 PB", None), ("0 GB", None), ("2 TB", None), ("", None)],
+)
+def test_macos_vram_units_are_parsed(text: str, expected: int | None) -> None:
+    assert profiles._parse_macos_vram_gb(text) == expected
