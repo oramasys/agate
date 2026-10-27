@@ -48,6 +48,7 @@ class HardwareObservation:
 
 @dataclass(frozen=True, slots=True)
 class ProfileStore:
+    """The versioned set of hardware profiles loaded from the database."""
     version: int
     profiles: dict[str, HardwareProfile]
 
@@ -89,6 +90,7 @@ _NVIDIA_SMI_ARGS = [
 
 
 def _read_database(path: Path | str | None) -> Any:
+    """Read the profile JSON from an explicit path, the env override, or the bundled resource."""
     if path is not None:
         with Path(path).open(encoding="utf-8") as handle:
             return json.load(handle)
@@ -103,10 +105,12 @@ def _read_database(path: Path | str | None) -> Any:
 
 
 def _is_valid_memory_gb(value: Any) -> bool:
+    """True for a non-bool integer of at least 1 GiB."""
     return not isinstance(value, bool) and isinstance(value, int) and value >= 1
 
 
 def _is_valid_text(value: Any) -> bool:
+    """True for a string with non-whitespace content."""
     return isinstance(value, str) and bool(value.strip())
 
 
@@ -256,6 +260,7 @@ def _parse_profile(raw: dict[str, Any]) -> HardwareProfile:
     # Keep in parity with schemas/hardware_profiles.schema.json (Draft 2020-12):
     # the schema is the contract, this loader is one enforcement of it, and
     # tests assert both accept and reject the same corpus.
+    """Validate one raw profile mapping and build a HardwareProfile."""
     if not isinstance(raw, dict):
         raise ValueError("hardware profile must be an object")
     required = {
@@ -324,6 +329,7 @@ def load_profile_store(path: Path | str | None = None) -> ProfileStore:
 
 
 def get_profile(profile_id: str, path: Path | str | None = None) -> HardwareProfile:
+    """Return the profile with this id, or raise KeyError listing known ids."""
     profiles = load_profile_store(path).profiles
     try:
         return profiles[profile_id]
@@ -334,10 +340,12 @@ def get_profile(profile_id: str, path: Path | str | None = None) -> HardwareProf
 
 
 def _contains(observed: str | None, expected: object) -> bool:
+    """Case-insensitive substring test that is False when nothing was observed."""
     return observed is not None and str(expected).casefold() in observed.casefold()
 
 
 def _matches(profile: HardwareProfile, observation: HardwareObservation) -> bool:
+    """True when the observation satisfies every constraint in the profile's match block."""
     match = profile.match
     if "os" in match and observation.os != match["os"]:
         return False

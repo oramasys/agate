@@ -12,9 +12,11 @@ import agate.profiles as profiles
 def test_windows_observer_reads_cim_json_without_claiming_a_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: windows observer reads cim json without claiming a profile."""
     observed_command: list[str] = []
 
     def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Test double: fake run."""
         observed_command.extend(command)
         return subprocess.CompletedProcess(
             command,
@@ -58,7 +60,9 @@ def test_windows_observer_fails_closed_on_unusable_cim_output(
     monkeypatch: pytest.MonkeyPatch,
     stdout: str,
 ) -> None:
+    """Check: windows observer fails closed on unusable cim output."""
     def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Test double: fake run."""
         return subprocess.CompletedProcess(command, 0, stdout=stdout)
 
     monkeypatch.setattr(profiles.platform, "system", lambda: "Windows")
@@ -90,6 +94,7 @@ def _windows_host(
     """
 
     def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Test double: fake run."""
         if command[0].endswith("powershell.exe"):
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(cim))
         if command[0] == SMI_PATH and nvidia_smi is not None:
@@ -116,6 +121,7 @@ _RTX3080_CIM: dict[str, object] = {
 
 
 def test_windows_caption_is_normalised_to_edition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: windows caption is normalised to edition."""
     _windows_host(monkeypatch, _RTX3080_CIM, None)
     assert profiles.observe_local_hardware().os == "Windows 11 Pro"
 
@@ -124,11 +130,13 @@ def test_windows_caption_is_normalised_to_edition(monkeypatch: pytest.MonkeyPatc
 def test_windows_missing_caption_keeps_plain_windows(
     monkeypatch: pytest.MonkeyPatch, caption: object
 ) -> None:
+    """Check: windows missing caption keeps plain windows."""
     _windows_host(monkeypatch, {**_RTX3080_CIM, "os_caption": caption}, None)
     assert profiles.observe_local_hardware().os == "Windows"
 
 
 def test_windows_vram_prefers_nvidia_smi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: windows vram prefers nvidia smi."""
     _windows_host(
         monkeypatch,
         {**_RTX3080_CIM, "registry_vram_bytes": 16 * GIB},
@@ -138,34 +146,40 @@ def test_windows_vram_prefers_nvidia_smi(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_nvidia_smi_16303_mib_rounds_to_16(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: nvidia smi 16303 mib rounds to 16."""
     _windows_host(monkeypatch, _RTX3080_CIM, f"{RTX3080}, 16303\n")
     assert profiles.observe_local_hardware().accelerator_memory_gb == 16
 
 
 def test_vram_falls_back_to_registry_qword(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: vram falls back to registry qword."""
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": 10 * GIB}, None)
     assert profiles.observe_local_hardware().accelerator_memory_gb == 10
 
 
 def test_nvidia_smi_not_used_for_non_nvidia_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: nvidia smi not used for non nvidia adapter."""
     cim = {**_RTX3080_CIM, "accelerator": "Example GPU", "registry_vram_bytes": 8 * GIB}
     _windows_host(monkeypatch, cim, "Example GPU, 10240\n")
     assert profiles.observe_local_hardware().accelerator_memory_gb == 8
 
 
 def test_adapter_ram_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: adapter ram is ignored."""
     cim = {**_RTX3080_CIM, "adapter_ram_bytes": 2 * GIB}
     _windows_host(monkeypatch, cim, None)
     assert profiles.observe_local_hardware().accelerator_memory_gb is None
 
 
 def test_multi_gpu_uses_the_matching_smi_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: multi gpu uses the matching smi row."""
     smi = f"NVIDIA GeForce RTX 5080, 16303\n  {RTX3080.lower()} , 10240\n"
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": 10 * GIB}, smi)
     assert profiles.observe_local_hardware().accelerator_memory_gb == 10
 
 
 def test_multi_gpu_without_matching_row_uses_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: multi gpu without matching row uses registry."""
     smi = "NVIDIA GeForce RTX 5080, 16303\nNVIDIA GeForce RTX 4090, 24564\n"
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": 10 * GIB}, smi)
     assert profiles.observe_local_hardware().accelerator_memory_gb == 10
@@ -174,6 +188,7 @@ def test_multi_gpu_without_matching_row_uses_registry(monkeypatch: pytest.Monkey
 def test_multi_gpu_without_matching_row_or_registry_is_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: multi gpu without matching row or registry is none."""
     _windows_host(monkeypatch, _RTX3080_CIM, "NVIDIA GeForce RTX 5080, 16303\n")
     assert profiles.observe_local_hardware().accelerator_memory_gb is None
 
@@ -181,6 +196,7 @@ def test_multi_gpu_without_matching_row_or_registry_is_none(
 def test_identical_cards_are_ambiguous_and_use_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: identical cards are ambiguous and use registry."""
     smi = f"{RTX3080}, 10240\n{RTX3080}, 10240\n"
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": 10 * GIB}, smi)
     assert profiles.observe_local_hardware().accelerator_memory_gb == 10
@@ -198,11 +214,16 @@ def test_identical_cards_are_ambiguous_and_use_registry(
         f"{RTX3080}, 1048577\n",
         subprocess.TimeoutExpired("nvidia-smi", 10),
         UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        subprocess.CalledProcessError(9, "nvidia-smi", stderr="NVIDIA-SMI has failed"),
+        FileNotFoundError("nvidia-smi.exe"),
+        PermissionError("access denied"),
     ],
 )
 def test_unusable_nvidia_smi_falls_back_to_registry(
     monkeypatch: pytest.MonkeyPatch, smi: str | BaseException
 ) -> None:
+    """Bad output or any run failure (non-zero exit, vanished binary, EACCES, timeout,
+    undecodable bytes) uses the registry VRAM, or None when the registry has none."""
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": 10 * GIB}, smi)
     assert profiles.observe_local_hardware().accelerator_memory_gb == 10
     _windows_host(monkeypatch, _RTX3080_CIM, smi)
@@ -213,6 +234,7 @@ def test_unusable_nvidia_smi_falls_back_to_registry(
 def test_implausible_registry_vram_is_rejected(
     monkeypatch: pytest.MonkeyPatch, registry: int
 ) -> None:
+    """Check: implausible registry vram is rejected."""
     _windows_host(monkeypatch, {**_RTX3080_CIM, "registry_vram_bytes": registry}, None)
     assert profiles.observe_local_hardware().accelerator_memory_gb is None
 
@@ -220,11 +242,13 @@ def test_implausible_registry_vram_is_rejected(
 def test_executables_are_resolved_to_absolute_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: executables are resolved to absolute paths."""
     monkeypatch.setenv("SystemRoot", "C:\\Windows")
     monkeypatch.setenv("ProgramFiles", "C:\\Program Files")
     seen: list[str] = []
 
     def fake_isfile(path: str) -> bool:
+        """Test double: fake isfile."""
         seen.append(path)
         return path.endswith("NVSMI\\nvidia-smi.exe")
 
@@ -242,6 +266,7 @@ def test_executables_are_resolved_to_absolute_paths(
 
 
 def test_real_host_facts_identify_win_rtx3080(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: real host facts identify win rtx3080."""
     _windows_host(monkeypatch, _RTX3080_CIM, f"{RTX3080}, 10240\n")
     observation = profiles.observe_local_hardware()
     profile = profiles.identify_profile(observation)
@@ -249,6 +274,7 @@ def test_real_host_facts_identify_win_rtx3080(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_unknown_vram_keeps_profile_unidentified(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: unknown vram keeps profile unidentified."""
     _windows_host(monkeypatch, _RTX3080_CIM, None)
     observation = profiles.observe_local_hardware()
     assert observation.os == "Windows 11 Pro"
@@ -280,6 +306,7 @@ def _mac_host(
     calls: list[dict[str, object]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Test double: fake run."""
         calls.append(kwargs)
         if isinstance(profiler, BaseException):
             raise profiler
@@ -290,6 +317,7 @@ def _mac_host(
     monkeypatch.setattr(profiles.subprocess, "run", fake_run)
     if ram_gb is None:
         def no_sysconf(_name: str) -> int:
+            """Test double: no sysconf."""
             raise ValueError("unavailable")
 
         monkeypatch.setattr(profiles.os, "sysconf", no_sysconf, raising=False)
@@ -303,6 +331,7 @@ def _mac_host(
 
 
 def _apple_silicon(**display: object) -> dict[str, object]:
+    """Test double: apple silicon."""
     return {
         "SPHardwareDataType": [{"chip_type": "Apple M2 Pro"}],
         "SPDisplaysDataType": [{"sppci_model": "Apple M2 Pro", **display}],
@@ -312,6 +341,7 @@ def _apple_silicon(**display: object) -> dict[str, object]:
 def test_apple_silicon_unified_memory_identifies_mac_studio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: apple silicon unified memory identifies mac studio."""
     calls = _mac_host(monkeypatch, _apple_silicon(sppci_bus="spdisplays_builtin"))
     observation = profiles.observe_local_hardware()
     assert calls[0]["timeout"] == 30
@@ -322,11 +352,13 @@ def test_apple_silicon_unified_memory_identifies_mac_studio(
 
 
 def test_apple_silicon_without_builtin_bus_still_maps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: apple silicon without builtin bus still maps."""
     _mac_host(monkeypatch, _apple_silicon())
     assert profiles.observe_local_hardware().accelerator_memory_gb == 16
 
 
 def test_intel_mac_keeps_spdisplays_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: intel mac keeps spdisplays vram."""
     _mac_host(monkeypatch, {
         "SPHardwareDataType": [{"cpu_type": "Intel Core i9"}],
         "SPDisplaysDataType": [{"sppci_model": "AMD Radeon Pro", "spdisplays_vram": "8 GB"}],
@@ -337,6 +369,7 @@ def test_intel_mac_keeps_spdisplays_vram(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_apple_chip_with_non_apple_gpu_gets_no_unified_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: apple chip with non apple gpu gets no unified mapping."""
     data = _apple_silicon()
     data["SPDisplaysDataType"] = [{"sppci_model": "AMD Radeon RX"}]
     _mac_host(monkeypatch, data)
@@ -344,6 +377,7 @@ def test_apple_chip_with_non_apple_gpu_gets_no_unified_mapping(
 
 
 def test_unknown_ram_leaves_unified_memory_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: unknown ram leaves unified memory none."""
     _mac_host(monkeypatch, _apple_silicon(), ram_gb=None)
     observation = profiles.observe_local_hardware()
     assert observation.accelerator_memory_gb is None
@@ -353,6 +387,7 @@ def test_unknown_ram_leaves_unified_memory_none(monkeypatch: pytest.MonkeyPatch)
 def test_system_profiler_timeout_reports_nothing_half_observed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Check: system profiler timeout reports nothing half observed."""
     calls = _mac_host(monkeypatch, subprocess.TimeoutExpired("system_profiler", 30))
     observation = profiles.observe_local_hardware()
     assert calls[0]["timeout"] == 30
@@ -362,6 +397,7 @@ def test_system_profiler_timeout_reports_nothing_half_observed(
 
 
 def _displays(*models: str) -> dict[str, object]:
+    """Test double: displays."""
     return {
         "SPHardwareDataType": [{"chip_type": "Apple M2 Pro"}],
         "SPDisplaysDataType": [{"sppci_model": m} if m else {"_name": "x"} for m in models],
@@ -369,6 +405,7 @@ def _displays(*models: str) -> dict[str, object]:
 
 
 def test_apple_gpu_with_egpu_gets_no_unified_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: apple gpu with egpu gets no unified mapping."""
     _mac_host(monkeypatch, _displays("Apple M2 Pro", "AMD Radeon RX"))
     observation = profiles.observe_local_hardware()
     assert observation.accelerator_memory_gb is None
@@ -376,11 +413,13 @@ def test_apple_gpu_with_egpu_gets_no_unified_mapping(monkeypatch: pytest.MonkeyP
 
 
 def test_egpu_first_then_apple_gets_no_unified_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: egpu first then apple gets no unified mapping."""
     _mac_host(monkeypatch, _displays("AMD Radeon RX", "Apple M2 Pro"))
     assert profiles.observe_local_hardware().accelerator_memory_gb is None
 
 
 def test_entries_without_model_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: entries without model are skipped."""
     _mac_host(monkeypatch, _displays("", "Apple M2 Pro"))
     observation = profiles.observe_local_hardware()
     assert observation.accelerator == "Apple M2 Pro"
@@ -394,4 +433,5 @@ def test_entries_without_model_are_skipped(monkeypatch: pytest.MonkeyPatch) -> N
      ("8 PB", None), ("0 GB", None), ("2 TB", None), ("", None)],
 )
 def test_macos_vram_units_are_parsed(text: str, expected: int | None) -> None:
+    """Check: macos vram units are parsed."""
     assert profiles._parse_macos_vram_gb(text) == expected
