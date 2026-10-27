@@ -396,7 +396,7 @@ def _observe_macos_display(ram_gb: int | None) -> tuple[str | None, str | None, 
     """
     try:
         result = subprocess.run(
-            ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
+            ["/usr/sbin/system_profiler", "SPHardwareDataType", "SPDisplaysDataType", "-json"],
             check=True, capture_output=True, text=True,
             timeout=_MACOS_PROFILER_TIMEOUT_SECONDS,
         )

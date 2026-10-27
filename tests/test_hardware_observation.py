@@ -302,12 +302,12 @@ def _mac_host(
     profiler: dict[str, object] | BaseException,
     ram_gb: int | None = 16,
 ) -> list[dict[str, object]]:
-    """Mock a macOS host; returns the kwargs of each ``system_profiler`` call."""
+    """Mock a macOS host; return the arguments of each ``system_profiler`` call."""
     calls: list[dict[str, object]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         """Test double: fake run."""
-        calls.append(kwargs)
+        calls.append({"command": command, **kwargs})
         if isinstance(profiler, BaseException):
             raise profiler
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(profiler))
@@ -349,6 +349,18 @@ def test_apple_silicon_unified_memory_identifies_mac_studio(
     assert observation.accelerator_memory_gb == 16
     profile = profiles.identify_profile(observation)
     assert profile is not None and profile.profile_id == "mac-studio"
+
+
+def test_macos_profiler_uses_absolute_system_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check: the macOS probe does not resolve its executable through PATH."""
+    calls = _mac_host(monkeypatch, _apple_silicon())
+    profiles.observe_local_hardware()
+    assert calls[0]["command"] == [
+        "/usr/sbin/system_profiler",
+        "SPHardwareDataType",
+        "SPDisplaysDataType",
+        "-json",
+    ]
 
 
 def test_apple_silicon_without_builtin_bus_still_maps(monkeypatch: pytest.MonkeyPatch) -> None:
